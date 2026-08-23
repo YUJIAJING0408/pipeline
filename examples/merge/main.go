@@ -122,14 +122,14 @@ func main() {
 	payment.Attach(merge)
 	risk.Attach(merge)
 
-	// ── 4. 下游：消费合并结果（Note: join 输出用 NewStage 显式创建）────
-	sink := pipeline.NewStage("sink-audit", pipeline.StageConfig{
+	// ── 4. 下游：消费合并结果（NextStage 自动管理生命周期，无需手动 Start/Close）────
+	merge.NextStage("sink-audit", pipeline.StageConfig{
 		Workers: 1, OutCap: 16,
-	}, merge.InChan(), nil, func(ctx context.Context, r checkResult) (checkResult, error) {
+	}, nil, func(ctx context.Context, r checkResult) (checkResult, error) {
 		fmt.Printf("  订单 %s 结算: [%s] %s\n", r.OrderID, r.Status, r.Detail)
 		return r, nil
 	}).Sink(func(ctx context.Context, r checkResult) {}) // 叶子消费，防背压
-	merge.To(sink) // 拓扑接线：让 GraphTD 画出 merge --> sink（数据流已由 InChan 连接）
+	// NextStage 自动调用 merge.To(sink) 完成拓扑接线，无需手动 To()。
 
 	// ── 5. 组装 Pipeline + 固定订单源 ─────────────────────────────────
 	pl := pipeline.New[string, OrderInfo](pipeline.PipelineConfig{
@@ -164,22 +164,13 @@ func main() {
 		cancelRun()
 	}()
 
-	// 下游与 root 树分离，需显式启动（join 的 InChan 是它的输入）。
-	go func() {
-		if err := sink.Start(runCtx, nil); err != nil {
-			fmt.Fprintln(os.Stderr, "sink start:", err)
-		}
-	}()
-
+	// 下游由 merge.NextStage 创建，自动跟随 MergeNode 生命周期（MergeNode 已 Attach 到各分支，
+	// 分支随 root 树递归 Start/Close），因此无需手动启动 sink。
 	if err := pl.Run(runCtx); err != nil {
 		fmt.Fprintln(os.Stderr, "run error:", err)
 	}
 	if err := pl.Close(5 * time.Second); err != nil {
 		fmt.Fprintln(os.Stderr, "close error:", err)
-	}
-	// sink 独立于 root 树，最后手动关闭。
-	if err := sink.Close(5 * time.Second); err != nil {
-		fmt.Fprintln(os.Stderr, "sink close:", err)
 	}
 	fmt.Println("已退出")
 }

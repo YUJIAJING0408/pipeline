@@ -645,15 +645,16 @@ join.Wire(b1).Wire(b2).Wire(b3)
 // 3. 生命周期挂到各分支（Attach 仅注册生命周期/拓扑，不参与数据转发）
 b1.Attach(join); b2.Attach(join); b3.Attach(join)
 
-// 4. 下游可继续链（数据连接靠 join.InChan()；To 仅拓扑接线，供 GraphTD 画 merge→downstream 边）
-post := pipeline.NewStage("audit", cfg, join.InChan(), nil, fnPost)
+// 4. 下游用 NextStage 创建（自动管理生命周期，无需手动 Start/Close）
+//    NextStage 自动调用 join.To(post) 完成拓扑接线。
+post := join.NextStage("audit", cfg, nil, fnPost)
 post.NextStage("report", cfg, nil, fnReport)
-join.To(post)
 
-// 5. 拓扑展示：Attach 让 merge 挂在分支下，分支递归 GraphTD 自然画出 fan-in 入边；
-//    RenderGraph(root) 可渲染 root 树 + merge 段 + 下游的完整图（id 全局唯一）
+// 5. 拓扑展示：RenderGraph(root) 即可渲染完整图（root 树 + merge 段 + 下游链）
 fmt.Println(pipeline.RenderGraph(root))
 ```
+
+**内部实现要点**：
 
 **内部实现要点**：
 

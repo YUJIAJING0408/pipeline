@@ -15,7 +15,7 @@ ORD-00001 ── root-parse ── 广播 ──┼─ branch-payment（支付�
 1. **Fan-out 广播**：`root.NextStage(...)` 3 次，同一订单被三条分支并行处理
 2. **Keyed Join 汇聚**：`NewMergeNode(Size: 3)` 按 `MergeKey()`（订单 ID）凑齐
    3 条分支结果——**全部到齐才合并**，缺一条则等待（超时进 OnLeak）
-3. **下游消费**：合并结果经 `merge.InChan()` 交给下游 Stage 继续处理
+3. **下游消费**：合并结果经 `merge.NextStage()` 自动接入下游（生命周期自动管理，无需手动 Start/Close）
 
 ## 运行
 
@@ -51,6 +51,7 @@ graph TD
 | `NewMergeNode[T Keyable](name, cfg, mergeFn)` | 创建合并节点，按 key 凑齐 cfg.Size 条 |
 | `merge.Wire(branch)` | 接入一个分支（编译期约束输出类型实现 `Keyable`） |
 | `branch.Attach(merge)` | 生命周期挂到分支（root 树递归启动/关闭 merge） |
-| `merge.InChan()` | 合并结果输出，供下游 `NewStage` 消费 |
-| `merge.To(sink)` | 拓扑接线（仅 GraphTD 绘制，数据流由 InChan 完成） |
+| `merge.NextStage(name, cfg, nil, fn)` | **推荐**：创建下游 Stage，自动管理生命周期（Start/Close 由 merge 递归遍历） |
+| `merge.InChan()` | 手动方式：合并结果输出通道，供 `NewStage(..., merge.InChan(), ...)` 消费 |
+| `merge.To(sink)` | 拓扑接线（仅 GraphTD 绘制，NextStage 自动调用，手动场景需自行调用） |
 | `pipeline.RenderGraph(root)` | 渲染完整图（fan-in 入边由分支递归自动画出） |

@@ -101,6 +101,9 @@ type MergeNode[T Keyable] struct {
 	closeErr   error
 	refs       atomic.Int32  // 当前存活的父调用方计数（Start +1 / Close -1）
 	describeOnce sync.Once
+
+	// subStages 下游 Stage 列表（由 NextStage 创建，Start/Close 递归遍历）。
+	subStages []Stager
 }
 
 // srcEntry 记录一个 Wire 接入的分支（channel 元素类型 T）。
@@ -160,6 +163,20 @@ func NewMergeNode[T Keyable](name string, cfg JoinConfig[T],
 		collector: make(chan collectItem[T]),
 		mergeCh:   make(chan []T, cfg.MergeQueueCap),
 	}
+}
+
+// NextStage 创建下游 Stage，自动接入 merge 输出并纳入生命周期管理。
+//
+// 与手动 NewStage(merge.InChan()) 的区别：通过 NextStage 创建的下游 Stage
+// 自动注册到 MergeNode 的 subStages，Start/Close 由 MergeNode 递归遍历，
+// 用户无需手动管理其生命周期（MergeNode 已通过 Attach 挂到父树）。
+//
+// 同时自动调用 To() 注册拓扑接线（GraphTD 画出 merge→downstream 边）。
+func (j *MergeNode[T]) NextStage[T3 any](name string, cfg StageConfig, routeFn func(T) bool, fn func(ctx context.Context, in T) (T3, error)) *Stage[T, T3] {
+	downstream := NewStage(name, cfg, j.output, routeFn, fn)
+	j.subStages = append(j.subStages, downstream)
+	j.To(downstream)
+	return downstream
 }
 
 // Wire 接入一个分支：MergeNode 将消费 s 的输出。
@@ -307,6 +324,12 @@ func (j *MergeNode[T]) doStart(ctx context.Context) error {
 			}
 		}
 	}()
+	// 启动下游 subStages（NextStage 创建的下游 Stage，merge 输出已就绪）。
+	for _, st := range j.subStages {
+		if err := st.Start(j.ctx, nil); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
@@ -458,5 +481,10 @@ func (j *MergeNode[T]) doClose(drainTimeout time.Duration) error {
 		return ErrCloseTimeout
 	}
 	close(j.output)
+	// 关闭下游 subStages（NextStage 创建的下游 Stage，此时 j.output 已闭，
+	// 下游 Stage 的 worker 自然排空，不会阻塞）。
+	for i := len(j.subStages) - 1; i >= 0; i-- {
+		_ = j.subStages[i].Close(drainTimeout)
+	}
 	return nil
 }
