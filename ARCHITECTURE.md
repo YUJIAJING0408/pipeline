@@ -3,7 +3,7 @@
 > **变更约定**：本文件是 pipeline 项目的唯一权威设计文档。后续无论是新增需求还是修改需求，**必须先同步更新本文档并确认，再编写代码**。代码实现必须与本文档保持一致。
 
 - 语言：Go 1.27
-- 模块：`github.com/example/pipeline`
+- 模块：`github.com/YUJIAJING0408/pipeline`
 - 版本：v1.0.0（已发布）
 - 更新日期：2026-08-22
 
@@ -811,7 +811,7 @@ func main() {
 
 ```
 pipeline/
-├── go.mod                 # module github.com/example/pipeline / go 1.27（组件库，无 main 包）
+├── go.mod                 # module github.com/YUJIAJING0408/pipeline / go 1.27（组件库，无 main 包）
 ├── go.sum                 # 依赖校验
 ├── LICENSE                # MIT 许可证
 ├── version                # 当前版本号（CI 自动打 tag 时读取）

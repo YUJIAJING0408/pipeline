@@ -22,7 +22,7 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/example/pipeline"
+	"github.com/YUJIAJING0408/pipeline"
 )
 
 // OrderInfo 解析后的订单信息（根节点输出，各分支共享类型）。

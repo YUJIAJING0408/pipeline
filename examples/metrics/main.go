@@ -9,7 +9,7 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/example/pipeline"
+	"github.com/YUJIAJING0408/pipeline"
 )
 
 func main() {

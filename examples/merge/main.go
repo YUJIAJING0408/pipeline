@@ -23,7 +23,7 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/example/pipeline"
+	"github.com/YUJIAJING0408/pipeline"
 )
 
 // checkResult 单分支对某订单的检查结果（must 实现 pipeline.Keyable）。
