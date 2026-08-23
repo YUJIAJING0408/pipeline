@@ -35,7 +35,7 @@
 | D-01 数据流模型 | 泛型 Stage + Channel | Pipeline 管理根 Stage 的流向，Stage 间通过 Channel 流通数据（NextStage 连接父子、Fan-out 广播到各分支） |
 | D-02 时间监控 | 强制内置 | 每个 Stage 运行中记录 total/errors/latency（`StageMonitor`），用户可调用 `Monitor.GenerateSummary()` 获取汇总或 `Monitor.Format()` 生成格式化报告（含各 Stage 的平均/最大耗时） |
 | D-03 拓扑范围 | 串行 + 树形 Fork + 汇聚（已实现） | 通过 `NextStage` 多次调用可形成树形多分支拓扑（每个子 Stage 获得独立 input Channel，Fan-out 广播）；`routeFn` 支持条件路由（D-25）；`MergeNode` 支持 Keyed Fan-in 汇聚（D-26，见 8.6） |
-| D-04 错误处理 | 三种模式全支持（已实现） | Fail-Fast（取消 Stage ctx 整链传播）、Collect（记录错误继续处理，汇总报告中呈现）、Retry+Fallback（按 MaxRetry/RetryDelay 重试，耗尽后降级函数）。`OnError` 回调所有模式触发。process 错误自动包装为 `StageError`（分类 + 上下文），支持 `errors.Is/As` 判型。通过 `Pipeline.ErrorPolicy(ErrPolicy)` 全局注入，经 params 传递给每个 Stage 的 workerPool |
+| D-04 错误处理 | 三种模式全支持（已实现） | Fail-Fast（取消 Stage ctx 整链传播）、Collect（记录错误继续处理，汇总报告中呈现）、Retry+Fallback（按 MaxRetry/RetryDelay 重试，耗尽后降级函数）。`OnError` 回调所有模式触发。process 错误自动包装为 `StageError`（分类 + 上下文），支持 `errors.Is/As` 判型。策略通过 `Pipeline.ErrorPolicy(ErrPolicy)` 全局注入（经 params 传递给每个 Stage 的 workerPool），**各 Stage 也可通过 `StageConfig.ErrPolicy` 单独配置覆盖全局** |
 | D-05 并发模型 | Stage 内 WorkerPool | 每个 Stage 内部维护自己的 WorkerPool，消费输入 Channel |
 | D-06 运行形态 | 持续运行 + 自定义 InputSource | 框架不内置调度器，但支持自定义 InputSource 实现定时/事件驱动数据源（如 real 示例的 timedSource）；同时内置 MockSource 用于测试 |
 | D-07 关闭机制 | 级联优雅关闭（递归） | `Stage.Close` 递归：先关闭自身（排空 WorkerPool、关闭 output、取消 forwardCtx），再递归关闭所有 subStages |
@@ -123,13 +123,14 @@
 ### 4.1 泛型 Stage（D-11：struct + 函数字段）
 
 ```go
-// StageConfig 描述单个 Stage 的运行时配置（D-14/D-22/D-24）。
+// StageConfig 描述单个 Stage 的运行时配置（D-14/D-22/D-24/D-04）。
 type StageConfig struct {
     Workers       int           // WorkerPool 并发数，必须 ≥ 1
     OutCap        int           // 当前 Stage 输出 Channel 容量，必须 ≥ 0
     Timeout       time.Duration // 单条数据处理超时，0 表示不超时
     SlowThreshold time.Duration // 慢处理阈值：单条耗时超过即打印慢日志，0 表示不启用（D-22）
     Hooks         StageHooks    // process 生命周期钩子（D-24，前后回调，均为可选）
+    ErrPolicy     *ErrPolicy    // 本 Stage 错误策略（D-04，非 nil 时覆盖全局策略）
 }
 
 // StageHooks 定义 process 执行前后的生命周期回调（D-24）。

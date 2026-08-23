@@ -61,6 +61,9 @@ type StageConfig struct {
 	// Hooks 为 process 生命周期钩子（D-24），嵌入 process 前后回调，
 	// 用户可在此注入 trace / 审计日志 / 限流等横切关注点，无需修改 process 函数。
 	Hooks StageHooks
+	// ErrPolicy 为本 Stage 的错误策略（D-04）。非 nil 时覆盖全局策略，
+	// nil 时使用 Pipeline.ErrorPolicy() 注入的全局策略。
+	ErrPolicy *ErrPolicy
 }
 
 // StageHooks 定义 process 执行前后的生命周期回调（D-24）。
@@ -282,11 +285,18 @@ func (s *Stage[T1, T2]) Start(ctx context.Context, params map[string]any) error 
 			s.stageMonitor = &StageMonitor{}
 			mon.Register(s.name, s.stageMonitor)
 		}
-		// 读取错误策略（D-04）：从 params 读取 errPol 对象。
+	}
+	// 读取错误策略（D-04）：优先使用本 Stage 配置的 ErrPolicy（覆盖全局策略）。
+	// 配置级策略不依赖 params，放在 params 块之外。
+	if s.config.ErrPolicy != nil {
+		s.errPol = s.config.ErrPolicy
+	} else if params != nil {
 		if ep, ok := params["errPol"].(*ErrPolicy); ok && ep != nil {
 			s.errPol = ep
 		}
-		// 读取死信队列配置（D-23）：从 params 读取 deadLetter 对象。
+	}
+	// 读取死信队列配置（D-23）：从 params 读取 deadLetter 对象。
+	if params != nil {
 		if dl, ok := params["deadLetter"].(*DeadLetterConfig); ok && dl != nil {
 			sink := dl.Sink
 			own := false
