@@ -130,10 +130,9 @@ func (wp *workerPool[In, Out]) handle(ctx context.Context, in In) {
 		fmt.Printf("[slow] stage=%s input=%v took=%v threshold=%v\n",
 			wp.stageName, in, elapsed, wp.slowThreshold)
 	}
-	// 记录耗时与成败到监控统计（D-02）。
-	if wp.stageMonitor != nil {
-		wp.stageMonitor.record(elapsed, err != nil)
-	}
+	// 记录耗时到监控统计（D-02）。注意：成败标记（err != nil）在错误处理完成后才记录，
+	// 避免重试成功的数据被错误计入失败计数——首次失败但重试成功的数据，不计入 errors。
+	// 监控统计在 success 标签和各失败 return 处分别记录。
 
 	if err != nil {
 		// 统一包装为 StageError（携带 Stage 名 / 输入值 / 耗时 / 错误分类），
@@ -151,6 +150,9 @@ func (wp *workerPool[In, Out]) handle(ctx context.Context, in In) {
 			switch wp.errPol.Mode {
 			case ErrModeFailFast:
 				wp.dlEnqueue(se, 0)
+				if wp.stageMonitor != nil {
+					wp.stageMonitor.record(time.Since(start), true)
+				}
 				if wp.cancel != nil {
 					wp.cancel()
 				}
@@ -165,6 +167,9 @@ func (wp *workerPool[In, Out]) handle(ctx context.Context, in In) {
 					select {
 					case <-ctx.Done():
 						retryTimer.Stop()
+						if wp.stageMonitor != nil {
+							wp.stageMonitor.record(time.Since(start), true)
+						}
 						return
 					case <-retryTimer.C:
 					}
@@ -210,19 +215,33 @@ func (wp *workerPool[In, Out]) handle(ctx context.Context, in In) {
 					}
 				}
 				wp.dlEnqueue(se, retried)
+				if wp.stageMonitor != nil {
+					wp.stageMonitor.record(time.Since(start), true)
+				}
 				return // 最终失败，该条数据不进入下游
 			case ErrModeCollect:
 				wp.dlEnqueue(se, 0)
+				if wp.stageMonitor != nil {
+					wp.stageMonitor.record(time.Since(start), true)
+				}
 				// 仅记录（已通过 onError/OnError 回调），继续处理下一条
 				return
 			}
 		}
 		// 未配置错误策略：默认 Collect 行为，失败数据进死信。
 		wp.dlEnqueue(se, 0)
+		if wp.stageMonitor != nil {
+			wp.stageMonitor.record(time.Since(start), true)
+		}
 		return // 处理失败，该条数据不进入下游
 	}
 
 success:
+	// 记录成功到监控统计（D-02）：含重试/降级消耗的总耗时。
+	elapsed = time.Since(start)
+	if wp.stageMonitor != nil {
+		wp.stageMonitor.record(elapsed, false)
+	}
 	// 叶子 Stage（配置 sink）直接消费结果，不产生无人读取的 output（D-21）。
 	if wp.sink != nil {
 		wp.sink(procCtx, out)
