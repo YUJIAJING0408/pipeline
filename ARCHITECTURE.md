@@ -58,6 +58,7 @@
 | D-24 生命周期钩子 | 已实现 | `StageHooks` 嵌入 process 前后：`OnBeforeProcess`（注入 ctx）/ `OnAfterProcess`（捕获 out/err/latency），零侵入实现 trace / 审计 / 限流等横切关注点 |
 | D-25 条件路由 | 已实现 | `NewStage` / `NextStage` 的 `routeFn func(T1) bool` 参数（nil=放行）。父节点投递前检查子节点的 `routeFn`，false 则跳过该分支。零运行时开销：`fanoutRouteFuncs` 平行切片，编译期类型安全，无接口断言 |
 | D-26 条件汇聚（Keyed Fan-in） | 已实现（8.6） | `MergeNode` 按 `MergeKey` 凑齐 N 个分支结果后合并；单收集 goroutine 零锁 + 过期扫描清理 + **引用计数关闭**；`Attach` 注册生命周期子节点（不参与数据转发） |
+| D-27 背压可视化 | 已实现（7.4） | `StageMonitor` 新增 `blockedTime` + `depthFn`，`Metrics()` 输出 `QueueDepth`/`BlockedTime`；MetricsServer SSE 帧含 `queueDepth`/`blockedTimeNs`；前端面板显示"积压/阻塞/条/阻塞总"四列 |
 
 ### 已暂时排除的内容（YAGNI）
 
@@ -481,23 +482,35 @@ logs/
 - `GET /` → `embed` 内嵌 `index.html` 前端页面（纯原生 JS，无外部 CDN）；
 - `GET /metrics` → **SSE 流**，按 `RefreshInterval`（默认 1s）推送一帧全量 JSON 快照；
 - `snapshot` 计算各 Stage 相对上一帧的**吞吐量**（条/秒），帧内含：
-  `total / errors / throughput / avgLatency / maxLatency / p50 / p99`；
+  `total / errors / throughput / avgLatency / maxLatency / p50 / p99 / queueDepth / blockedTime`；
 - `Monitor.Metrics()` 为纯查询 API：不持有全局锁计算分位（仅逐个锁 StageMonitor），供
-  外部巡检 / Prometheus 抓取等场景复用。
+  外部巡检 / Prometheus 抓取等场景复用；
+- **背压指标**（D-27）：`queueDepth` 为当前输入队列积压条数（`len(input)`），
+  `blockedTime` 为累计 output 写阻塞耗时（每条数据写下游时若 output 满则计等待时间）；
+  前端面板显示"积压/阻塞/条/阻塞总"四列，一目了然瓶颈位置。
 
-接入方式（见 `examples/metrics`）：
+**挂载方式**——`MetricsServer` 提供三种 handler 接入方式：
 
 ```go
+// 方式一：独立端口（默认，使用 Start/StartAsync）
 ms := &pipeline.MetricsServer{Monitor: pl.MetricsMonitor(), Addr: ":8080"}
-go ms.Start()          // 或 StartAsync() 检测启动失败
-defer ms.Shutdown(ctx)
+go ms.Start()
+
+// 方式二：挂载到用户自己的 HTTP 服务（完整路由）
+mux := http.NewServeMux()
+mux.Handle("/pipeline/", http.StripPrefix("/pipeline", ms.Handler()))
+
+// 方式三：只挂载 SSE 流或主页
+mux.Handle("/metrics", ms.MetricsHandler())
+mux.Handle("/", ms.IndexHandler())
 ```
 
 应用场景：
 
 - **超时取消**：单条 `Process` 超过 `StageConfig.Timeout` 时，通过 `context.WithTimeout` 取消该任务；
 - **链路时间分析**：用户可随时调用 `Monitor.GenerateSummary()` 获取所有 Stage 统计汇总（含各 Stage 平均/最大耗时），或 `Monitor.Format()` 生成格式化报告字符串，由调用方决定输出方式，可定位整条链路的时间瓶颈；
-- **实时监控**：打开 `http://host:port/` 即可看到各 Stage 实时吞吐与延迟分位（SSE 自动刷新）。
+- **实时监控**：打开 `http://host:port/` 即可看到各 Stage 实时吞吐与延迟分位（SSE 自动刷新）；
+- **背压定位**：观察"积压"列（队列深度）和"阻塞/条"列（平均写等待耗时），快速定位瓶颈 Stage。
 
 ---
 

@@ -22,6 +22,10 @@ type StageMonitor struct {
 	maxLatency   time.Duration // 单条最大耗时（瓶颈定位）
 	lastLatency  time.Duration // 最近一次耗时
 
+	// 背压相关指标（D-27）。
+	blockedTime time.Duration // 累计 output 写阻塞耗时（高值 = 下游瓶颈）
+	depthFn     func() int    // 读取输入队列深度（Start 时设置，nil 时返回 0）
+
 	// samples 环形缓冲保留最近 sampleBufSize 条耗时，用于计算分位数（P50/P99）。
 	samples      [sampleBufSize]time.Duration
 	sampleCount  int
@@ -50,6 +54,24 @@ func (m *StageMonitor) record(latency time.Duration, failed bool) {
 	if m.sampleCount < sampleBufSize {
 		m.sampleCount++
 	}
+}
+
+// recordBlocked 记录一次 output 写阻塞耗时（D-27，背压检测）。
+func (m *StageMonitor) recordBlocked(latency time.Duration) {
+	if latency <= 0 {
+		return
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.blockedTime += latency
+}
+
+// queueDepth 返回当前输入队列深度（积压数据条数，0 表示无积压）。
+func (m *StageMonitor) queueDepth() int {
+	if m.depthFn == nil {
+		return 0
+	}
+	return m.depthFn()
 }
 
 // snapshot 返回当前统计的快照（供 Monitor 汇总使用）。
@@ -159,16 +181,18 @@ func (m *Monitor) Format() string {
 
 // StageMetrics 描述单个 Stage 的实时运行指标（供仪表盘/监控轮询）。
 type StageMetrics struct {
-	StageName  string
-	Total      uint64
-	Errors     uint64
-	AvgLatency time.Duration
-	MaxLatency time.Duration
-	P50        time.Duration
-	P99        time.Duration
+	StageName   string
+	Total       uint64
+	Errors      uint64
+	AvgLatency  time.Duration
+	MaxLatency  time.Duration
+	P50         time.Duration
+	P99         time.Duration
+	QueueDepth  int           // 当前输入队列积压条数（D-27，背压检测）
+	BlockedTime time.Duration // 累计 output 写阻塞耗时（D-27，高值 = 下游瓶颈）
 }
 
-// Metrics 聚合所有 Stage 的实时指标（含 P50/P99 分位数），按注册顺序返回。
+// Metrics 聚合所有 Stage 的实时指标（含 P50/P99 分位数+背压指标），按注册顺序返回。
 // 供实时监控面板轮询使用；与 GenerateSummary 不同，Metrics 不持有全局锁计算分位。
 func (m *Monitor) Metrics() []StageMetrics {
 	m.mu.Lock()
@@ -182,15 +206,25 @@ func (m *Monitor) Metrics() []StageMetrics {
 		}
 		total, errs, avg, max := sm.snapshot()
 		p50, p99 := sm.p50p99()
+		blocked := sm.blockedTimeSnapshot()
 		out = append(out, StageMetrics{
-			StageName:  name,
-			Total:      total,
-			Errors:     errs,
-			AvgLatency: avg,
-			MaxLatency: max,
-			P50:        p50,
-			P99:        p99,
+			StageName:   name,
+			Total:       total,
+			Errors:      errs,
+			AvgLatency:  avg,
+			MaxLatency:  max,
+			P50:         p50,
+			P99:         p99,
+			QueueDepth:  sm.queueDepth(),
+			BlockedTime: blocked,
 		})
 	}
 	return out
+}
+
+// blockedTimeSnapshot 返回累计 output 写阻塞耗时（线程安全快照）。
+func (m *StageMonitor) blockedTimeSnapshot() time.Duration {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.blockedTime
 }

@@ -41,12 +41,28 @@ func (ms *MetricsServer) interval() time.Duration {
 	return ms.RefreshInterval
 }
 
-// Handler 返回该服务绑定的 HTTP Handler（便于测试复用）。
+// Handler 返回该服务绑定的完整 HTTP Handler（包含主页 + SSE 流），便于测试复用或挂载到用户服务器。
+//
+// 挂载到用户服务器示例：
+//
+//	mux := http.NewServeMux()
+//	mux.Handle("/pipeline/", http.StripPrefix("/pipeline", ms.Handler()))
+//	http.ListenAndServe(":8080", mux)
 func (ms *MetricsServer) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", ms.handleIndex)
 	mux.HandleFunc("/metrics", ms.handleSSE)
 	return mux
+}
+
+// IndexHandler 返回仅处理主页（GET /）的 HTTP Handler，可单独挂载到用户服务器的自定义路径。
+func (ms *MetricsServer) IndexHandler() http.HandlerFunc {
+	return ms.handleIndex
+}
+
+// MetricsHandler 返回仅处理 SSE 流（GET /metrics）的 HTTP Handler，可单独挂载到用户服务器的自定义路径。
+func (ms *MetricsServer) MetricsHandler() http.HandlerFunc {
+	return ms.handleSSE
 }
 
 // Start 启动 HTTP 监听（阻塞）。调用方应另起 goroutine 运行，或使用 Shutdown 优雅停止。
@@ -124,14 +140,16 @@ type metricsJSON struct {
 }
 
 type stageEntry struct {
-	Name       string  `json:"name"`
-	Total      uint64  `json:"total"`
-	Errors     uint64  `json:"errors"`
-	Throughput float64 `json:"throughput"` // 每秒处理条数（相对上一帧）
-	AvgLatency int64   `json:"avgLatencyNs"`
-	MaxLatency int64   `json:"maxLatencyNs"`
-	P50        int64   `json:"p50Ns"`
-	P99        int64   `json:"p99Ns"`
+	Name        string  `json:"name"`
+	Total       uint64  `json:"total"`
+	Errors      uint64  `json:"errors"`
+	Throughput  float64 `json:"throughput"` // 每秒处理条数（相对上一帧）
+	AvgLatency  int64   `json:"avgLatencyNs"`
+	MaxLatency  int64   `json:"maxLatencyNs"`
+	P50         int64   `json:"p50Ns"`
+	P99         int64   `json:"p99Ns"`
+	QueueDepth  int     `json:"queueDepth"`  // 当前输入队列积压条数（D-27）
+	BlockedTime int64   `json:"blockedTimeNs"` // 累计 output 写阻塞耗时（D-27）
 }
 
 // snapshot 基于 Monitor.Metrics 构建推送帧并计算各 Stage 吞吐量。
@@ -165,14 +183,16 @@ func (ms *MetricsServer) snapshot() metricsJSON {
 		}
 		ms.prevTotal[m.StageName] = m.Total
 		frame.Stages = append(frame.Stages, stageEntry{
-			Name:       m.StageName,
-			Total:      m.Total,
-			Errors:     m.Errors,
-			Throughput: throughput,
-			AvgLatency: m.AvgLatency.Nanoseconds(),
-			MaxLatency: m.MaxLatency.Nanoseconds(),
-			P50:        m.P50.Nanoseconds(),
-			P99:        m.P99.Nanoseconds(),
+			Name:        m.StageName,
+			Total:       m.Total,
+			Errors:      m.Errors,
+			Throughput:  throughput,
+			AvgLatency:  m.AvgLatency.Nanoseconds(),
+			MaxLatency:  m.MaxLatency.Nanoseconds(),
+			P50:         m.P50.Nanoseconds(),
+			P99:         m.P99.Nanoseconds(),
+			QueueDepth:  m.QueueDepth,
+			BlockedTime: m.BlockedTime.Nanoseconds(),
 		})
 	}
 	ms.prevTime = now

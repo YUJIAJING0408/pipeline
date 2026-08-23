@@ -66,11 +66,14 @@
       <th>P99</th>
       <th>平均</th>
       <th>最大</th>
+      <th>积压</th>
+      <th>阻塞/条</th>
+      <th>阻塞总</th>
     </tr>
   </thead>
   <tbody id="rows"></tbody>
 </table>
-<div class="footer">数据由后端 SSE 推送 · 刷新间隔由 MetricsServer.RefreshInterval 控制</div>
+<div class="footer">数据由后端 SSE 推送 · 积压=输入队列深度 · 阻塞/条=平均每条 output 写等待耗时 · 阻塞总=累计阻塞耗时</div>
 
 <script>
 (function () {
@@ -92,6 +95,18 @@
     return v.toFixed(1);
   }
 
+  function fmtDepth(v) {
+    if (v <= 0) return '<span class="zero">0</span>';
+    if (v > 100) return '<span class="err">' + v + '</span>';
+    return v;
+  }
+
+  function fmtBlocked(totalNs, count) {
+    if (totalNs <= 0 || count <= 0) return '<span class="zero">-</span>';
+    var avg = Math.round(totalNs / count);
+    return fmtDur(avg);
+  }
+
   function render(frame) {
     rowsEl.innerHTML = '';
     frame.stages.forEach(function (s) {
@@ -104,7 +119,10 @@
         '<td>' + fmtDur(s.p50Ns) + '</td>' +
         '<td>' + fmtDur(s.p99Ns) + '</td>' +
         '<td>' + fmtDur(s.avgLatencyNs) + '</td>' +
-        '<td>' + fmtDur(s.maxLatencyNs) + '</td>';
+        '<td>' + fmtDur(s.maxLatencyNs) + '</td>' +
+        '<td>' + fmtDepth(s.queueDepth) + '</td>' +
+        '<td>' + fmtBlocked(s.blockedTimeNs, s.total) + '</td>' +
+        '<td>' + fmtDur(s.blockedTimeNs) + '</td>';
       rowsEl.appendChild(tr);
     });
     var t = new Date(frame.timestamp);

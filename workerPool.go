@@ -248,8 +248,13 @@ success:
 		return
 	}
 
+	// 写 output 并测量阻塞时间（D-27，背压检测：output 满时 select 等待时长即为阻塞耗时）。
+	writeStart := time.Now()
 	select {
 	case wp.out <- out:
+		if wp.stageMonitor != nil {
+			wp.stageMonitor.recordBlocked(time.Since(writeStart))
+		}
 	case <-ctx.Done():
 		// 前驱已关闭：放弃写出，退出防死锁
 	}

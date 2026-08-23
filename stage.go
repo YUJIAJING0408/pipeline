@@ -282,7 +282,7 @@ func (s *Stage[T1, T2]) Start(ctx context.Context, params map[string]any) error 
 		}
 		// 创建耗时监控（D-02）：从 params 读取 monitor 对象并注册。
 		if mon, ok := params["monitor"].(*Monitor); ok && mon != nil {
-			s.stageMonitor = &StageMonitor{}
+			s.stageMonitor = &StageMonitor{depthFn: func() int { return len(s.input) }}
 			mon.Register(s.name, s.stageMonitor)
 		}
 	}
