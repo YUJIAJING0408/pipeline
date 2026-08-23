@@ -34,14 +34,22 @@ jobs:
 
       - name: Create and push tag
         run: |
-          VERSION=$(cat version | tr -d '\n' | tr -d ' ')
+          # version 文件格式：第一行为版本号，后续行为本版本更新项（填充到 tag 消息）
+          VERSION=$(sed -n '1p' version | tr -d ' \t')
+          CHANGELOG=$(sed -n '2,$p' version | tr '\n' '\n')
           TAG="v${VERSION}"
           git config user.name "CI Bot"
           git config user.email "ci@example.com"
+          git config core.quotepath false
           if git rev-parse "$TAG" >/dev/null 2>&1; then
             echo "Tag $TAG already exists, skipping"
           else
-            git tag -a "$TAG" -m "Release $TAG"
+            {
+              echo "Release $TAG"
+              echo ""
+              echo "$CHANGELOG"
+            } > /tmp/tag_message.txt
+            git tag -a "$TAG" -F /tmp/tag_message.txt
             git push origin "$TAG"
-            echo "Created tag $TAG"
+            echo "Created tag $TAG with changelog"
           fi
