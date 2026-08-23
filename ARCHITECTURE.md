@@ -57,7 +57,7 @@
 | D-23 死信队列 | 已实现（8.5） | 处理失败数据投递到 `DeadLetterSink` 接口（默认 JSONL 落盘 `{Dir}/{stage}.dl.jsonl`）；自定义 sink 无缝接入。`DrainDeadLetters` 读取 + `DeadLetterReplaySource` 重放 |
 | D-24 生命周期钩子 | 已实现 | `StageHooks` 嵌入 process 前后：`OnBeforeProcess`（注入 ctx）/ `OnAfterProcess`（捕获 out/err/latency），零侵入实现 trace / 审计 / 限流等横切关注点 |
 | D-25 条件路由 | 已实现 | `NewStage` / `NextStage` 的 `routeFn func(T1) bool` 参数（nil=放行）。父节点投递前检查子节点的 `routeFn`，false 则跳过该分支。零运行时开销：`fanoutRouteFuncs` 平行切片，编译期类型安全，无接口断言 |
-| D-26 条件汇聚（Keyed Fan-in） | 已实现（8.6） | `MergeNode` 按 `MergeKey` 凑齐 N 个分支结果后合并；单收集 goroutine 零锁 + 过期扫描清理 + **引用计数关闭**；`Attach` 注册生命周期子节点（不参与数据转发） |
+| D-26 条件汇聚（Keyed Fan-in） | 已实现（8.6） | `MergeNode` 按 `MergeKey` 凑齐 N 个分支结果后合并；单收集 goroutine 零锁 + 过期扫描清理 + **引用计数关闭**；`Attach` 注册生命周期子节点（不参与数据转发）；`NextStage` 支持多次调用创建多个下游分支，**routeFn** 支持条件路由（D-25） |
 | D-27 背压可视化 | 已实现（7.4） | `StageMonitor` 新增 `blockedTime` + `depthFn`，`Metrics()` 输出 `QueueDepth`/`BlockedTime`；MetricsServer SSE 帧含 `queueDepth`/`blockedTimeNs`；前端面板显示"积压/阻塞/条/阻塞总"四列 |
 
 ### 已暂时排除的内容（YAGNI）
@@ -680,6 +680,7 @@ fmt.Println(pipeline.RenderGraph(root))
 | 过期清理 | `MergeTimeout` 未凑齐 → sweep 扫描 → `OnLeak` 回调 + 可选死信 + 删除 |
 | **引用计数关闭** | `sync.Once` 不够：分支按序关闭时，真关闭须等**最后一个父**（此时全部分支已停，收集自然退出），否则收集会阻塞在未关分支的 channel 上 |
 | `Attach` | `Stage.subStages` 新增生命周期子节点（不创建 fanout 分支），由父递归 Start/Close/Describe/GraphTD |
+| **下游 routeFn** | `NextStage` 可多次调用创建多个下游分支，每个分支独立通道 + `routeFn` 过滤（D-25）；合并结果经 fan-out 分发 goroutine 按路由条件投递到匹配分支 |
 
 **边界**：Wire 数 ≠ Size 报错；同 key 超量到达忽略+告警；输出背压经 mergeCh 反压到分支（天然背压）；Close 时残批走 OnLeak+死信不丢弃。
 

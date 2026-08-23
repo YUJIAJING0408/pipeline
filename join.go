@@ -81,8 +81,8 @@ type MergeNode[T Keyable] struct {
 	cfg    JoinConfig[T]
 	merge  func(ctx context.Context, batch []T) (T, error)
 	srcs   []srcEntry[T]         // Wire 采集的分支（Stager 用于拓扑 + channel 用于收集）
-	to     Stager                // To 登记的下游（仅拓扑接线）
-	output chan T                // 合并结果输出（下游 NewStage 以此作 input）
+	output chan T                // 合并结果内部通道（fan-out 分发到各下游）
+	outs   []outEntry[T]         // 下游分支（路由 + 生命周期 + 拓扑）
 
 	pending   map[string]*pending[T]
 	collector chan collectItem[T] // 转发 goroutine → 收集 goroutine
@@ -91,6 +91,7 @@ type MergeNode[T Keyable] struct {
 	srcWG sync.WaitGroup  // 各分支转发 goroutine
 	mgWG  sync.WaitGroup  // merge 工作池
 	cgWG  sync.WaitGroup  // 收集 goroutine
+	fanWG sync.WaitGroup  // fan-out 分发 goroutine
 
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -104,6 +105,13 @@ type MergeNode[T Keyable] struct {
 
 	// subStages 下游 Stage 列表（由 NextStage 创建，Start/Close 递归遍历）。
 	subStages []Stager
+}
+
+// outEntry 记录一个下游分支（fan-out 目标 + 路由条件 + 生命周期引用）。
+type outEntry[T any] struct {
+	ch      chan T      // 下游分支独立输入通道（fan-out 复制目标）
+	stage   Stager      // 下游 Stage（生命周期 + 拓扑）
+	routeFn func(T) bool // 路由条件（nil = 放行所有）
 }
 
 // srcEntry 记录一个 Wire 接入的分支（channel 元素类型 T）。
@@ -171,11 +179,13 @@ func NewMergeNode[T Keyable](name string, cfg JoinConfig[T],
 // 自动注册到 MergeNode 的 subStages，Start/Close 由 MergeNode 递归遍历，
 // 用户无需手动管理其生命周期（MergeNode 已通过 Attach 挂到父树）。
 //
-// 同时自动调用 To() 注册拓扑接线（GraphTD 画出 merge→downstream 边）。
+// 可多次调用 NextStage 创建多个下游分支，每个分支独立接受 merge 输出（fan-out 复制）。
+// routeFn 非 nil 时仅当函数返回 true 才将合并结果投递到该分支（条件路由，D-25）。
 func (j *MergeNode[T]) NextStage[T3 any](name string, cfg StageConfig, routeFn func(T) bool, fn func(ctx context.Context, in T) (T3, error)) *Stage[T, T3] {
-	downstream := NewStage(name, cfg, j.output, routeFn, fn)
+	ch := make(chan T, max(cfg.OutCap, 0))
+	downstream := NewStage(name, cfg, ch, nil, fn)
+	j.outs = append(j.outs, outEntry[T]{ch: ch, stage: downstream, routeFn: routeFn})
 	j.subStages = append(j.subStages, downstream)
-	j.To(downstream)
 	return downstream
 }
 
@@ -185,10 +195,12 @@ func (j *MergeNode[T]) Wire[In any](s *Stage[In, T]) *MergeNode[T] {
 	return j
 }
 
-// To 登记下游 Stage（仅拓扑接线，用于 GraphTD 递归画下游链；
-// 数据连接由调用方用 j.InChan() 作为下游 input 完成）。
+// To 登记下游 Stage（仅拓扑接线，用于 GraphTD 画 merge→downstream 边）。
+// 与 NextStage 不同：To 不创建新通道，不参与数据流和生命周期管理。
+// 数据连接由调用方通过 j.InChan() 手动完成。
+// 仅当 NextStage 无法满足接线需求时使用。
 func (j *MergeNode[T]) To(downstream Stager) *MergeNode[T] {
-	j.to = downstream
+	j.outs = append(j.outs, outEntry[T]{stage: downstream})
 	return j
 }
 
@@ -208,8 +220,10 @@ func (j *MergeNode[T]) Describe(parent string) {
 			names = append(names, s.stage.Name())
 		}
 		fmt.Printf("%s -> %s ( merge of [%s] )\n", parent, j.name, strings.Join(names, ", "))
-		if j.to != nil {
-			j.to.Describe(j.name)
+		for _, o := range j.outs {
+			if o.stage != nil {
+				o.stage.Describe(j.name)
+			}
 		}
 	})
 }
@@ -218,17 +232,19 @@ func (j *MergeNode[T]) Describe(parent string) {
 //
 // 注意：MergeNode 已通过 Attach 注册到各分支的 subStages，分支递归 GraphTD
 // 时会自然画出 fan-in 入边（branch-A --> merge / branch-B --> merge / …）。
-// 因此本方法只负责画下游（To() 登记时的 merge --> downstream --> 链）。
-// 由于 merge 挂在多个分支下会被多次递归触达，用下游是否已入图去重，避免重复边。
+// 因此本方法只负责画下游（NextStage/To 登记的各分支）。
+// 用下游是否已入图去重，避免重复边。
 func (j *MergeNode[T]) GraphTD(w *graphTDWriter) {
-	if j.to == nil {
-		return
-	}
-	if _, drawn := w.ids[j.to]; !drawn {
-		w.edge(j, j.to)
-	}
-	if g, ok := j.to.(interface{ GraphTD(*graphTDWriter) }); ok {
-		g.GraphTD(w)
+	for _, o := range j.outs {
+		if o.stage == nil {
+			continue
+		}
+		if _, drawn := w.ids[o.stage]; !drawn {
+			w.edge(j, o.stage)
+		}
+		if g, ok := o.stage.(interface{ GraphTD(*graphTDWriter) }); ok {
+			g.GraphTD(w)
+		}
 	}
 }
 
@@ -329,6 +345,27 @@ func (j *MergeNode[T]) doStart(ctx context.Context) error {
 		if err := st.Start(j.ctx, nil); err != nil {
 			return err
 		}
+	}
+	// 启动 fan-out 分发 goroutine：从 j.output 读每条合并结果，按 routeFn 分发到各下游分支。
+	if len(j.outs) > 0 {
+		j.fanWG.Add(1)
+		go func() {
+			defer j.fanWG.Done()
+			for v := range j.output {
+				for _, o := range j.outs {
+					if o.routeFn != nil && !o.routeFn(v) {
+						continue // 路由拒绝，跳过此分支
+					}
+					if o.ch != nil {
+						select {
+						case o.ch <- v:
+						case <-j.ctx.Done():
+							return
+						}
+					}
+				}
+			}
+		}()
 	}
 	return nil
 }
@@ -481,7 +518,15 @@ func (j *MergeNode[T]) doClose(drainTimeout time.Duration) error {
 		return ErrCloseTimeout
 	}
 	close(j.output)
-	// 关闭下游 subStages（NextStage 创建的下游 Stage，此时 j.output 已闭，
+	// 等待 fan-out 分发 goroutine 退出（j.output 已闭，range 循环自然结束）。
+	j.fanWG.Wait()
+	// 关闭所有下游分支的输入通道，通知下游 Stage 排空。
+	for _, o := range j.outs {
+		if o.ch != nil {
+			close(o.ch)
+		}
+	}
+	// 关闭下游 subStages（NextStage 创建的下游 Stage，此时各分支输入通道已闭，
 	// 下游 Stage 的 worker 自然排空，不会阻塞）。
 	for i := len(j.subStages) - 1; i >= 0; i-- {
 		_ = j.subStages[i].Close(drainTimeout)
