@@ -35,7 +35,7 @@ jobs:
       - name: Create and push tag
         run: |
           VERSION=$(cat version | tr -d '\n' | tr -d ' ')
-          TIMESTAMP=$(date +%Y%m%d%H%M)
+          TIMESTAMP=$(TZ=Asia/Shanghai date +%Y%m%d%H%M)
           TAG="v${VERSION}_${TIMESTAMP}"
           git config user.name "CI Bot"
           git config user.email "ci@example.com"
