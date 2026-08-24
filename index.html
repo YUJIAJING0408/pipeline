@@ -48,6 +48,8 @@
   td.name { font-weight: 600; color: var(--accent); }
   td.err { color: var(--err); font-weight: 700; }
   td.zero { color: var(--muted); }
+  tr.summary { border-top: 2px solid var(--accent); }
+  tr.summary td { background: #243a52; font-weight: 600; color: var(--accent); }
   .footer { margin-top: 16px; color: var(--muted); font-size: 12px; }
   .chart-wrap { margin-top: 20px; background: var(--panel); border-radius: 8px; padding: 14px; }
   .chart-title { color: var(--muted); font-size: 13px; margin-bottom: 8px; }
@@ -135,6 +137,22 @@
         '<td>' + fmtDur(s.blockedTimeNs) + '</td>';
       rowsEl.appendChild(tr);
     });
+    // 整链路汇总行（D-33）。
+    if (frame.summary) {
+      var s = frame.summary;
+      var tr = document.createElement('tr');
+      tr.className = 'summary';
+      tr.innerHTML =
+        '<td class="name" title="整条链路聚合">∑ 汇总</td>' +
+        '<td>' + fmtThr(s.throughput) + '</td>' +
+        '<td>' + s.total + '</td>' +
+        '<td class="' + (s.errors > 0 ? 'err' : '') + '">' + s.errors + '</td>' +
+        '<td colspan="4">' + fmtDur(s.avgLatencyNs) + ' / ' + fmtDur(s.maxLatencyNs) + '（均/均）</td>' +
+        '<td>' + fmtDepth(s.queueDepth) + '</td>' +
+        '<td>-</td>' +
+        '<td>' + fmtDur(s.blockedTimeNs) + '</td>';
+      rowsEl.appendChild(tr);
+    }
     var t = new Date(frame.timestamp);
     statusEl.textContent = '已连接 · 更新于 ' + t.toLocaleTimeString();
     statusEl.className = 'connected';

@@ -1,2 +1,2 @@
-1.0.7
-- Stage 新增 SetDefaultBranch：routeFn 全不匹配时数据投递给默认分支（D-32），不再静默丢弃
+1.0.8
+- MetricsServer 增加整链路汇总行（D-33）：聚合各 Stage 总量/吞吐/积压/阻塞，延迟取均值，前端表格高亮展示

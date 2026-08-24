@@ -137,6 +137,8 @@ func relayHeaders(h http.Header) {
 type metricsJSON struct {
 	Timestamp int64        `json:"timestamp"` // Unix 毫秒
 	Stages    []stageEntry `json:"stages"`
+	// Summary 整条链路的汇总行（D-33，nil = 无 stage 或未启用）。
+	Summary *stageEntry `json:"summary,omitempty"`
 }
 
 type stageEntry struct {
@@ -194,6 +196,27 @@ func (ms *MetricsServer) snapshot() metricsJSON {
 			QueueDepth:  m.QueueDepth,
 			BlockedTime: m.BlockedTime.Nanoseconds(),
 		})
+	}
+	// 整条链路汇总行（D-33）：聚合各 Stage 总量/吞吐/积压/阻塞，延迟取均值。
+	if len(frame.Stages) > 0 {
+		sum := &stageEntry{Name: "__total__"}
+		var avgSum, latSum int64
+		for _, st := range frame.Stages {
+			sum.Total += st.Total
+			sum.Errors += st.Errors
+			sum.Throughput += st.Throughput
+			sum.QueueDepth += st.QueueDepth
+			sum.BlockedTime += st.BlockedTime
+			avgSum += st.AvgLatency
+			latSum += st.MaxLatency
+			if st.MaxLatency > sum.MaxLatency {
+				sum.MaxLatency = st.MaxLatency
+			}
+		}
+		n := int64(len(frame.Stages))
+		sum.AvgLatency = avgSum / n
+		sum.MaxLatency = latSum / n
+		frame.Summary = sum
 	}
 	ms.prevTime = now
 	return frame
