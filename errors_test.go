@@ -380,3 +380,51 @@ func TestErrPolicyRetryExhaustedFallback(t *testing.T) {
 		t.Error("降级后应有输出 99")
 	}
 }
+
+// TestRetryDelayBackoff 验证指数退避间隔：Backoff=2 时 100ms→200ms→400ms。
+func TestRetryDelayBackoff(t *testing.T) {
+	wp := &workerPool[int, int]{}
+	wp.errPol = &ErrPolicy{RetryDelay: 100 * time.Millisecond, RetryBackoff: 2.0}
+
+	cases := []struct {
+		n    int
+		want time.Duration
+	}{
+		{0, 100 * time.Millisecond},
+		{1, 200 * time.Millisecond},
+		{2, 400 * time.Millisecond},
+		{3, 800 * time.Millisecond},
+	}
+	for _, c := range cases {
+		if got := wp.retryDelay(c.n); got != c.want {
+			t.Errorf("retryDelay(%d) = %v, want %v", c.n, got, c.want)
+		}
+	}
+}
+
+// TestRetryDelayFixed 验证 Backoff ≤ 1 时退化为固定间隔（兼容旧行为）。
+func TestRetryDelayFixed(t *testing.T) {
+	wp := &workerPool[int, int]{}
+	wp.errPol = &ErrPolicy{RetryDelay: 50 * time.Millisecond, RetryBackoff: 0} // 0 = 固定
+	for n := 0; n < 5; n++ {
+		if got := wp.retryDelay(n); got != 50*time.Millisecond {
+			t.Errorf("retryDelay(%d) = %v, want 固定 50ms", n, got)
+		}
+	}
+	wp.errPol.RetryBackoff = 1.0 // 1 = 固定
+	for n := 0; n < 5; n++ {
+		if got := wp.retryDelay(n); got != 50*time.Millisecond {
+			t.Errorf("Backoff=1 retryDelay(%d) = %v, want 50ms", n, got)
+		}
+	}
+}
+
+// TestRetryDelayCap 验证指数增长上限 1 小时，不溢出。
+func TestRetryDelayCap(t *testing.T) {
+	wp := &workerPool[int, int]{}
+	wp.errPol = &ErrPolicy{RetryDelay: time.Millisecond, RetryBackoff: 10.0}
+	// 第 10 次：1ms × 10^10 = 10^7s，远超 1 小时，应封顶。
+	if got := wp.retryDelay(10); got != time.Hour {
+		t.Errorf("retryDelay(10) = %v, want 封顶 1h", got)
+	}
+}

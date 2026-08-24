@@ -19,7 +19,8 @@
 //   - MetricsServer：实时指标面板，HTTP + SSE 推送吞吐/P50/P99/队列深度/阻塞时长；
 //     可独立端口运行，也可通过 Handler/IndexHandler/MetricsHandler 挂载到用户 HTTP 服务（7.4）；
 //   - 三模式错误策略：FailFast（取消 ctx 传播）/ Collect（记录跳过）/ RetryFallback
-//     （重试+降级），通过 Pipeline.ErrorPolicy() 全局注入，或 StageConfig.ErrPolicy 按 Stage 覆盖；
+//     （重试+降级，支持 RetryBackoff 指数退避 D-31），通过 Pipeline.ErrorPolicy() 全局注入，
+//     或 StageConfig.ErrPolicy 按 Stage 覆盖；
 //   - 错误类型体系（D-04）：StageError 分类（CodeTimeout/CodeInvalidInput/CodeProcessing/
 //     CodeSystem），errors.Is/As 判型，WithCode 标注；
 //   - 死信队列（D-23）：DeadLetterSink 接口 + 默认 JSONL 落盘，支持重放 ReplaySource；

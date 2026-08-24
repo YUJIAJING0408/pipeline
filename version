@@ -1,3 +1,2 @@
-1.0.4
-- MergeNode 补齐可观测性（D-30）：JoinConfig 新增 SlowThreshold（merge 慢日志）/ RateLimiter（merge 限流）/ OnMergeError（merge 失败回调）
-- MergeNode 接入 stageMonitor（D-02）：Metrics/MetricsServer 可观测 merge 吞吐与延迟
+1.0.5
+- ErrPolicy 新增 RetryBackoff 指数退避（D-31）：第 n 次重试间隔 = RetryDelay × Backoff^(n-1)，上限 1h；Backoff ≤ 1 兼容固定间隔

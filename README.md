@@ -35,6 +35,7 @@
 - **泛型 WorkerPool**：每个 Stage 内部并发处理，支持单条超时
 - **三模式错误策略**：FailFast / Collect / Retry+Fallback，`OnError` 回调，process panic 自动 recover；
   可全局配置（`Pipeline.ErrorPolicy()`）或按 Stage 覆盖（`StageConfig.ErrPolicy`）
+- **重试指数退避**：`RetryBackoff` 乘数（100ms→200ms→400ms），上限 1h（D-31）
 - **错误类型体系**：`StageError` 分类（超时/非法输入/业务/系统），`errors.Is/As` 判型，`WithCode` 标注
 - **死信队列**：失败数据投递 `DeadLetterSink`（默认 JSONL 落盘），`DrainDeadLetters` 读取 + 重放
 - **条件路由**：`NextStage` 的 `routeFn` 参数按条件分发给匹配分支（D-25）
@@ -137,5 +138,5 @@ func main() {
 
 核心链路已跑通：`NextStage 链式连接 → 递归 Start/Close → 输入源注入 → 级联优雅关闭`。
 JSON 结构化日志、三模式错误策略（含 panic recover、按 Stage 覆盖）、死信队列、条件路由（D-25）、
-Keyed 汇聚（D-26）、生命周期钩子、背压可视化（D-27）、拓扑校验（D-28）、内置限流器（D-29）、MergeNode 可观测性（D-30）——118 个测试（含集成/并发/泄漏）全部通过，
+Keyed 汇聚（D-26）、生命周期钩子、背压可视化（D-27）、拓扑校验（D-28）、内置限流器（D-29）、MergeNode 可观测性（D-30）、重试退避（D-31）——121 个测试（含集成/并发/泄漏）全部通过，
 Benchmark 零内存分配。零第三方依赖。

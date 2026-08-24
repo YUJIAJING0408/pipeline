@@ -167,12 +167,14 @@ func (wp *workerPool[In, Out]) handle(ctx context.Context, in In) {
 				}
 				return // 处理失败，该条数据不进入下游
 			case ErrModeRetryFallback:
-				// 重试：按 MaxRetry / RetryDelay 重试。
+				// 重试：按 MaxRetry 重试，间隔按指数退避（D-31）：
+				// 第 n 次间隔 = RetryDelay × Backoff^(n-1)；Backoff ≤ 1 时固定 RetryDelay。
 				// 每次重试使用新的超时上下文（避免首次超时后所有重试立即失败）。
-				retryTimer := time.NewTimer(wp.errPol.RetryDelay)
+				retryTimer := time.NewTimer(wp.retryDelay(0))
 				retried := 0
 				for i := 0; i < wp.errPol.MaxRetry; i++ {
-					retryTimer.Reset(wp.errPol.RetryDelay)
+					delay := wp.retryDelay(retried)
+					retryTimer.Reset(delay)
 					select {
 					case <-ctx.Done():
 						retryTimer.Stop()
@@ -272,6 +274,29 @@ success:
 // wait 等待所有 worker 退出（Input 关闭 / ctx 取消后排空完成）。
 func (wp *workerPool[In, Out]) wait() {
 	wp.wg.Wait()
+}
+
+// retryDelay 计算第 n 次重试的等待间隔（D-31）：
+// = RetryDelay × RetryBackoff^n；RetryBackoff ≤ 1 时固定为 RetryDelay。
+// RetryBackoff ≤ 0 时按 1 处理（兼容旧行为：固定间隔）。
+// 防止指数增长溢出：上限 1 小时。
+func (wp *workerPool[In, Out]) retryDelay(n int) time.Duration {
+	const maxDelay = time.Hour
+	if wp.errPol == nil || wp.errPol.RetryBackoff <= 1 {
+		if wp.errPol == nil || wp.errPol.RetryDelay <= 0 {
+			return time.Millisecond
+		}
+		return wp.errPol.RetryDelay
+	}
+	base := float64(wp.errPol.RetryDelay)
+	delay := base
+	for i := 0; i < n; i++ {
+		delay *= wp.errPol.RetryBackoff
+		if delay > float64(maxDelay) {
+			return maxDelay
+		}
+	}
+	return time.Duration(delay)
 }
 
 // dlEnqueue 将一条最终失败数据写入死信队列（D-23）。

@@ -26,7 +26,8 @@ const (
 type ErrPolicy struct {
 	Mode       ErrMode
 	MaxRetry   int                                                    // RetryFallback 模式：最大重试次数
-	RetryDelay time.Duration                                          // RetryFallback 模式：重试间隔
+	RetryDelay time.Duration                                          // RetryFallback 模式：基础重试间隔（第 1 次）
+	RetryBackoff float64                                              // 指数退避乘数（D-31）：第 n 次间隔 = RetryDelay × Backoff^(n-1)；≤1 时为固定间隔
 	Fallback   func(ctx context.Context, in any) (out any, err error) // 重试耗尽后的降级函数
 	OnError    func(err error, stageName string, in any)              // 错误回调（所有模式触发）
 }

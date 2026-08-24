@@ -62,6 +62,7 @@
 | D-28 拓扑校验 | 已实现（9.1） | `Pipeline.Validate()` 构建期校验：数据流无环（DFS 三色）/ MergeNode 分支数匹配 / 生命周期已挂载 / 分支与下游不重复 / 无孤立节点；一次性返回全部错误 |
 | D-29 限流器 | 已实现（7.5） | 内置令牌桶 `RateLimiter`（Allow 丢弃式 / Wait 背压式），`StageConfig.RateLimiter` 按 Stage 注入，process 前限流，保护下游慢依赖 |
 | D-30 MergeNode 可观测性 | 已实现（8.6） | `JoinConfig` 增加 `SlowThreshold`（merge 慢日志，D-22 对齐）/ `RateLimiter`（merge 前限流，D-29 对齐）/ `OnMergeError`（merge 失败回调，D-04 对齐）；MergeNode 接入 `stageMonitor`（Metrics/MetricsServer 可观测 merge 环节） |
+| D-31 重试退避 | 已实现（8.3） | `ErrPolicy.RetryBackoff`：第 n 次重试间隔 = `RetryDelay × Backoff^(n-1)`；0 或 1 = 固定间隔（兼容旧行为），>1 = 指数退避，降低对下游瞬时故障的冲击 |
 
 ### 已暂时排除的内容（YAGNI）
 
@@ -557,6 +558,8 @@ func (rl *RateLimiter) Wait(ctx context.Context) error // 背压式：阻塞等�
 ### 8.3 Retry + Fallback（重试降级）
 
 - 同一条消息先按 `MaxRetry` / `RetryDelay` 重试；
+- **指数退避（D-31）**：第 n 次重试间隔 = `RetryDelay × RetryBackoff^(n-1)`（Backoff=2 时 100ms → 200ms → 400ms），
+  Backoff ≤ 1 时退化为固定间隔（兼容旧行为）；
 - 重试耗尽仍失败 → 调用 `Fallback` 降级函数：
   - 降级成功 → 其输出继续走链路；
   - 降级失败 → 根据 `Mode`（Fail-Fast 或 Collect 行为）处理。
