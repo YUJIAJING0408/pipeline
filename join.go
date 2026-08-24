@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"runtime/debug"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -47,6 +48,14 @@ type JoinConfig[T Keyable] struct {
 	MergeQueueCap int
 	// OutCap 合并结果输出通道容量；0 = 64。
 	OutCap int
+	// SlowThreshold merge 耗时阈值：单次合并超过即打印慢日志（D-22 对齐，0 = 不启用）。
+	SlowThreshold time.Duration
+	// RateLimiter merge 前限流器（D-29 对齐，nil = 不限流）。
+	// Wait 背压式阻塞等待令牌；ctx 取消时该批次放弃。
+	RateLimiter *RateLimiter
+	// OnMergeError merge 失败回调（D-04 对齐，merge 返回错误或 panic 时触发）。
+	// 被调用后该批次丢弃（不进入下游）。nil = 跳过。
+	OnMergeError func(err error, batch []T)
 }
 
 // pending 是单个 key 的凑齐状态。
@@ -92,6 +101,9 @@ type MergeNode[T Keyable] struct {
 	mgWG  sync.WaitGroup  // merge 工作池
 	cgWG  sync.WaitGroup  // 收集 goroutine
 	fanWG sync.WaitGroup  // fan-out 分发 goroutine
+
+	// stageMonitor 耗时与计数统计（D-30，params 注入，非 nil 时记录 merge 数据）。
+	stageMonitor *StageMonitor
 
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -252,12 +264,12 @@ func (j *MergeNode[T]) GraphTD(w *graphTDWriter) {
 // doStart 仅执行一次（startOnce），其余调用直接返回首次结果。
 func (j *MergeNode[T]) Start(ctx context.Context, params map[string]any) error {
 	j.refs.Add(1)
-	j.startOnce.Do(func() { j.startErr = j.doStart(ctx) })
+	j.startOnce.Do(func() { j.startErr = j.doStart(ctx, params) })
 	return j.startErr
 }
 
 // doStart 校验配置并启动转发 goroutine / 收集 goroutine / merge 工作池。
-func (j *MergeNode[T]) doStart(ctx context.Context) error {
+func (j *MergeNode[T]) doStart(ctx context.Context, params map[string]any) error {
 	if len(j.srcs) != j.cfg.Size {
 		return fmt.Errorf("%w: wired=%d size=%d", ErrJoinSizeMismatch, len(j.srcs), j.cfg.Size)
 	}
@@ -268,6 +280,14 @@ func (j *MergeNode[T]) doStart(ctx context.Context) error {
 			return fmt.Errorf("%w: duplicate branch %q", ErrJoinConfig, s.stage.Name())
 		}
 		seen[s.stage] = true
+	}
+
+	// 注册监控统计（D-30）：从 params 读取 monitor（与 Stage 对齐）。
+	if params != nil {
+		if mon, ok := params["monitor"].(*Monitor); ok && mon != nil {
+			j.stageMonitor = &StageMonitor{}
+			mon.Register(j.name, j.stageMonitor)
+		}
 	}
 
 	j.ctx, j.cancel = context.WithCancel(ctx)
@@ -410,26 +430,54 @@ func (j *MergeNode[T]) enqueue(batch []T, p *pending[T]) {
 }
 
 // runMerge 执行一次合并并写 output（merge 工作池 goroutine）。
-// 输出写入带 ctx 感知：下游停止消费（背压极端）时，Close 阶段能放弃投递防止
-// 永久阻塞 merge worker（与 Stage workerPool.handle 语义一致）。
-// merge panic 被 recover 捕获，该批次丢弃（不崩溃）。
+// 支持限流（D-29）/ 慢日志（D-22）/ 错误回调（D-04）/ 监控统计（D-02），与 Stage 对齐（D-30）。
+// merge panic 被 recover 捕获并经 OnMergeError 回调，该批次丢弃（不崩溃）。
 func (j *MergeNode[T]) runMerge(batch []T) {
+	start := time.Now()
+
+	// 限流（D-29）：merge 前取得令牌，Wait 背压式阻塞；ctx 取消时放弃该批次。
+	if j.cfg.RateLimiter != nil {
+		if err := j.cfg.RateLimiter.Wait(j.ctx); err != nil {
+			return // ctx 取消或等待中断：放弃该批次
+		}
+	}
+
+	var out T
+	var merr error
 	func() {
 		defer func() {
 			if r := recover(); r != nil {
-				// v1：panic 批次丢弃；后续可扩展 OnMergeError 回调。
-				return
+				merr = fmt.Errorf("panic in merge: %v\n%s", r, debug.Stack())
 			}
 		}()
-		out, err := j.merge(j.ctx, batch)
-		if err != nil {
-			return // v1：合并失败批次丢弃（可扩展 OnError 回调）
-		}
-		select {
-		case j.output <- out:
-		case <-j.ctx.Done():
-		}
+		out, merr = j.merge(j.ctx, batch)
 	}()
+
+	elapsed := time.Since(start)
+
+	// 慢日志（D-22）：单次合并超过阈值即打印。
+	if j.cfg.SlowThreshold > 0 && elapsed > j.cfg.SlowThreshold {
+		fmt.Printf("[slow] stage=%s took=%v threshold=%v batch_size=%d\n",
+			j.name, elapsed, j.cfg.SlowThreshold, len(batch))
+	}
+
+	// 监控统计（D-02）：记录 merge 耗时与成败。
+	if j.stageMonitor != nil {
+		j.stageMonitor.record(elapsed, merr != nil)
+	}
+
+	// 错误处理（D-04）：merge 失败触发回调，批次丢弃。
+	if merr != nil {
+		if j.cfg.OnMergeError != nil {
+			j.cfg.OnMergeError(merr, batch)
+		}
+		return
+	}
+
+	select {
+	case j.output <- out:
+	case <-j.ctx.Done():
+	}
 }
 
 // sweepExpired 清理超时未凑齐的 key（残批 → OnLeak + 死信 + 删除）。

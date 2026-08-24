@@ -61,6 +61,7 @@
 | D-27 背压可视化 | 已实现（7.4） | `StageMonitor` 新增 `blockedTime` + `depthFn`，`Metrics()` 输出 `QueueDepth`/`BlockedTime`；MetricsServer SSE 帧含 `queueDepth`/`blockedTimeNs`；前端面板显示"积压/阻塞/条/阻塞总"四列 |
 | D-28 拓扑校验 | 已实现（9.1） | `Pipeline.Validate()` 构建期校验：数据流无环（DFS 三色）/ MergeNode 分支数匹配 / 生命周期已挂载 / 分支与下游不重复 / 无孤立节点；一次性返回全部错误 |
 | D-29 限流器 | 已实现（7.5） | 内置令牌桶 `RateLimiter`（Allow 丢弃式 / Wait 背压式），`StageConfig.RateLimiter` 按 Stage 注入，process 前限流，保护下游慢依赖 |
+| D-30 MergeNode 可观测性 | 已实现（8.6） | `JoinConfig` 增加 `SlowThreshold`（merge 慢日志，D-22 对齐）/ `RateLimiter`（merge 前限流，D-29 对齐）/ `OnMergeError`（merge 失败回调，D-04 对齐）；MergeNode 接入 `stageMonitor`（Metrics/MetricsServer 可观测 merge 环节） |
 
 ### 已暂时排除的内容（YAGNI）
 
@@ -704,6 +705,7 @@ fmt.Println(pipeline.RenderGraph(root))
 | **引用计数关闭** | `sync.Once` 不够：分支按序关闭时，真关闭须等**最后一个父**（此时全部分支已停，收集自然退出），否则收集会阻塞在未关分支的 channel 上 |
 | `Attach` | `Stage.subStages` 新增生命周期子节点（不创建 fanout 分支），由父递归 Start/Close/Describe/GraphTD |
 | **下游 routeFn** | `NextStage` 可多次调用创建多个下游分支，每个分支独立通道 + `routeFn` 过滤（D-25）；合并结果经 fan-out 分发 goroutine 按路由条件投递到匹配分支 |
+| **MergeNode 可观测性** | `JoinConfig` 支持 `SlowThreshold`（merge 慢日志）/ `RateLimiter`（merge 前限流）/ `OnMergeError`（merge 失败回调）；MergeNode 接入 `stageMonitor`，Metrics/MetricsServer 可观测 merge 吞吐与延迟（D-30） |
 
 **边界**：Wire 数 ≠ Size 报错；同 key 超量到达忽略+告警；输出背压经 mergeCh 反压到分支（天然背压）；Close 时残批走 OnLeak+死信不丢弃。
 

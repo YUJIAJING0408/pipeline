@@ -405,3 +405,120 @@ func TestJoinNodePanic(t *testing.T) {
 		t.Fatal("merge panic 后无法关闭（未 recover）")
 	}
 }
+// TestJoinNodeOnMergeError 验证 merge 失败触发 OnMergeError 回调，批次不进入下游。
+func TestJoinNodeOnMergeError(t *testing.T) {
+	var branches []*Stage[keyedItem, keyedItem]
+	ins := make([]chan keyedItem, 3)
+	for i := 0; i < 3; i++ {
+		in := make(chan keyedItem, 8)
+		b := NewStage("b", StageConfig{Workers: 1, OutCap: 8}, in, nil,
+			func(ctx context.Context, x keyedItem) (keyedItem, error) { return x, nil })
+		branches = append(branches, b)
+		ins[i] = in
+	}
+
+	var mergeErrCount atomic.Int64
+	join := NewMergeNode("merge", JoinConfig[keyedItem]{
+		Size: 3,
+		OnMergeError: func(err error, batch []keyedItem) {
+			mergeErrCount.Add(1)
+		},
+	}, func(ctx context.Context, batch []keyedItem) (keyedItem, error) {
+		return keyedItem{}, errors.New("merge failed")
+	})
+	for _, b := range branches {
+		join.Wire(b)
+		b.Attach(join)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	for _, b := range branches {
+		if err := b.Start(ctx, nil); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	ins[0] <- keyedItem{Order: "X", Part: "A"}
+	ins[1] <- keyedItem{Order: "X", Part: "B"}
+	ins[2] <- keyedItem{Order: "X", Part: "C"}
+
+	deadline := time.After(3 * time.Second)
+	for mergeErrCount.Load() == 0 {
+		select {
+		case <-time.After(20 * time.Millisecond):
+		case <-deadline:
+			t.Fatal("OnMergeError 未触发")
+		}
+	}
+	// 清理。
+	for _, b := range branches {
+		_ = b.Close(time.Second)
+	}
+}
+
+// TestJoinNodeSlowLog 验证 merge 慢日志打印。
+func TestJoinNodeSlowLog(t *testing.T) {
+	in := make(chan keyedItem, 8)
+	b := NewStage("b", StageConfig{Workers: 1, OutCap: 8}, in, nil,
+		func(ctx context.Context, x keyedItem) (keyedItem, error) { return x, nil })
+
+	join := NewMergeNode("slow-merge", JoinConfig[keyedItem]{
+		Size:          1,
+		SlowThreshold: time.Millisecond,
+	}, func(ctx context.Context, batch []keyedItem) (keyedItem, error) {
+		time.Sleep(5 * time.Millisecond) // 超阈值
+		return keyedItem{}, nil
+	})
+	join.Wire(b)
+	b.Attach(join)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	if err := b.Start(ctx, nil); err != nil {
+		t.Fatal(err)
+	}
+	in <- keyedItem{Order: "Y", Part: "A"}
+	// 消费 merge 输出。
+	go func() { for range join.output {
+	} }()
+	// 等慢日志打印（打印到 stdout，仅验证不 panic 且能关闭）。
+	time.Sleep(50 * time.Millisecond)
+	_ = b.Close(time.Second)
+}
+
+// TestJoinNodeMonitor 验证 merge 接入 stageMonitor 后可观测。
+func TestJoinNodeMonitor(t *testing.T) {
+	in := make(chan keyedItem, 8)
+	b := NewStage("b", StageConfig{Workers: 1, OutCap: 8}, in, nil,
+		func(ctx context.Context, x keyedItem) (keyedItem, error) { return x, nil })
+
+	join := NewMergeNode("monitored-merge", JoinConfig[keyedItem]{Size: 1},
+		func(ctx context.Context, batch []keyedItem) (keyedItem, error) { return batch[0], nil })
+	join.Wire(b)
+	b.Attach(join)
+
+	mon := NewMonitor()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	// 用 params 传递 monitor（与 Pipeline.Run 对齐）。
+	_ = b.Start(ctx, map[string]any{"monitor": mon})
+
+	in <- keyedItem{Order: "Z", Part: "A"}
+	go func() { for range join.output {
+	} }()
+	time.Sleep(50 * time.Millisecond)
+
+	// MergeNode 应注册到 Monitor。
+	metrics := mon.Metrics()
+	found := false
+	for _, m := range metrics {
+		if m.StageName == "monitored-merge" && m.Total > 0 {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("MergeNode 未接入 Monitor（应出现 monitored-merge 且有处理量），got: %+v", metrics)
+	}
+	_ = b.Close(time.Second)
+}
