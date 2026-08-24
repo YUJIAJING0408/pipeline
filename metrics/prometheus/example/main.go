@@ -52,7 +52,7 @@ func main() {
 	// 4. 运行 Pipeline。
 	ctx, cancel := context.WithCancel(context.Background())
 	go func() {
-		time.Sleep(3 * time.Second)
+		time.Sleep(60 * time.Second)
 		cancel()
 	}()
 	if err := pl.Run(ctx); err != nil {
