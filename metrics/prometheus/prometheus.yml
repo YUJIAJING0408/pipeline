@@ -1,0 +1,6 @@
+# Prometheus 配置
+scrape_configs:
+  - job_name: 'pipeline'
+    scrape_interval: 5s
+    static_configs:
+      - targets: ['app:2112']

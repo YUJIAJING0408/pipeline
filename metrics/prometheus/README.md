@@ -21,6 +21,16 @@ prometheus.MustRegister(exporter)
 http.Handle("/metrics", promhttp.Handler())
 ```
 
+## 运行
+
+```bash
+# 使用 Docker Compose 一键启动（编译示例 + Prometheus）
+cd metrics/prometheus && docker-compose up --build
+
+# 访问 Prometheus 控制台: http://localhost:9090
+# 查看指标: http://localhost:2112/metrics
+```
+
 ## 指标清单
 
 | 指标 | 类型 | Labels | 说明 |
