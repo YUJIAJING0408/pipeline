@@ -24,12 +24,31 @@ http.Handle("/metrics", promhttp.Handler())
 ## 运行
 
 ```bash
-# 使用 Docker Compose 一键启动（编译示例 + Prometheus）
-cd metrics/prometheus && docker-compose up --build
+# 一键启动（Docker 编译 + Prometheus + Grafana 自动配置）
+cd metrics/prometheus/example && docker-compose up --build
 
-# 访问 Prometheus 控制台: http://localhost:9090
-# 查看指标: http://localhost:2112/metrics
+# 访问地址：
+#   Pipeline 指标: http://localhost:2112/metrics
+#   Prometheus:    http://localhost:9090
+#   Grafana:       http://localhost:3000（匿名访问，自动加载 Dashboard）
 ```
+
+目录结构（`metrics/prometheus/`）：
+
+```
+├── exporter.go              # Exporter（prometheus.Collector），11 个指标
+├── exporter_test.go          # 测试
+├── go.mod / go.sum          # 子模块依赖
+├── example/
+│   ├── main.go               # 示例：树形多分支 Pipeline
+│   ├── Dockerfile            # 多阶段构建（alpine 镜像）
+│   ├── docker-compose.yaml   # App + Prometheus + Grafana 一键启动
+│   ├── prometheus.yml        # Prometheus 配置（scrape + 告警引用）
+│   ├── alerts.yml            # 告警规则（队列积压/错误率/吞吐骤降）
+│   └── grafana/
+│       ├── datasources/      # 自动配置 Prometheus 数据源
+│       └── dashboards/       # 预制 Dashboard（7 张面板）
+└── README.md
 
 ## 指标清单
 

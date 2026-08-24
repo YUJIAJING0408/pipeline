@@ -1,0 +1,30 @@
+groups:
+  - name: pipeline
+    interval: 15s
+    rules:
+      - alert: 队列积压过高
+        expr: pipeline_stage_queue_depth > 50
+        for: 30s
+        labels:
+          severity: warning
+        annotations:
+          summary: 'Stage {{ $labels.stage }} 队列积压 {{ $value }} 条'
+          description: '队列深度超过 50，持续 30 秒，可能下游处理瓶颈'
+
+      - alert: 错误率过高
+        expr: rate(pipeline_stage_errors_total[1m]) > 5
+        for: 1m
+        labels:
+          severity: warning
+        annotations:
+          summary: 'Stage {{ $labels.stage }} 错误率 {{ $value | humanize }} eps'
+          description: '每分钟错误数超过 5，持续 1 分钟'
+
+      - alert: 吞吐量骤降
+        expr: pipeline_stage_throughput < 10
+        for: 1m
+        labels:
+          severity: info
+        annotations:
+          summary: 'Stage {{ $labels.stage }} 吞吐量 {{ $value | humanize }}/s'
+          description: '吞吐量低于 10/s，持续 1 分钟，可能 Pipeline 停滞'

@@ -1,15 +1,8 @@
 services:
   app:
-    image: golang:1.27-alpine
-    working_dir: /app/metrics/prometheus
-    volumes:
-      - ../../:/app
-    command: >
-      sh -c "
-        go mod tidy &&
-        go build -o /tmp/pipeline_example ./example/ &&
-        /tmp/pipeline_example
-      "
+    build:
+      context: ../../..
+      dockerfile: metrics/prometheus/example/Dockerfile
     ports:
       - "2112:2112"
     networks:
@@ -19,6 +12,7 @@ services:
     image: prom/prometheus:latest
     volumes:
       - ./prometheus.yml:/etc/prometheus/prometheus.yml
+      - ./alerts.yml:/etc/prometheus/alerts.yml
     ports:
       - "9090:9090"
     depends_on:

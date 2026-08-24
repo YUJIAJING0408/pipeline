@@ -88,7 +88,7 @@ func main() {
 
 	root.NextStage("inventory", pipeline.StageConfig{Workers: 4, OutCap: 64}, nil,
 		func(ctx context.Context, o OrderInfo) (branchResult, error) {
-			time.Sleep(time.Duration(2000+rand.Intn(2000)) * time.Microsecond)
+			time.Sleep(time.Duration(8000+rand.Intn(12000)) * time.Microsecond) // 8-20ms
 			if rand.Intn(100) < 3 {
 				return branchResult{}, fmt.Errorf("库存不足: %s", o.Product)
 			}
@@ -98,7 +98,7 @@ func main() {
 
 	root.NextStage("payment", pipeline.StageConfig{Workers: 4, OutCap: 64}, nil,
 		func(ctx context.Context, o OrderInfo) (branchResult, error) {
-			time.Sleep(time.Duration(3000+rand.Intn(3000)) * time.Microsecond)
+			time.Sleep(time.Duration(15000+rand.Intn(25000)) * time.Microsecond) // 15-40ms
 			if rand.Intn(100) < 5 {
 				return branchResult{}, fmt.Errorf("支付失败: 余额不足")
 			}
@@ -108,7 +108,7 @@ func main() {
 
 	root.NextStage("risk", pipeline.StageConfig{Workers: 4, OutCap: 64}, nil,
 		func(ctx context.Context, o OrderInfo) (branchResult, error) {
-			time.Sleep(time.Duration(4000+rand.Intn(4000)) * time.Microsecond)
+			time.Sleep(time.Duration(25000+rand.Intn(35000)) * time.Microsecond) // 25-60ms
 			if rand.Intn(100) < 2 {
 				return branchResult{}, fmt.Errorf("风控拒绝: 大额订单")
 			}

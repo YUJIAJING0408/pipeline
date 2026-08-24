@@ -1,4 +1,6 @@
-# Prometheus 配置
+rule_files:
+  - /etc/prometheus/alerts.yml
+
 scrape_configs:
   - job_name: 'pipeline'
     scrape_interval: 5s
