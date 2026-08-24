@@ -24,9 +24,23 @@
     {
       "title": "P99 延迟",
       "type": "timeseries",
-      "gridPos": { "h": 6, "w": 24, "x": 0, "y": 6 },
+      "gridPos": { "h": 6, "w": 12, "x": 0, "y": 6 },
       "targets": [
         { "expr": "pipeline_stage_latency_p99_ns / 1e6", "legendFormat": "{{stage}}", "refId": "A" }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ms", "min": 0,
+          "custom": { "drawStyle": "line", "lineInterpolation": "smooth", "showPoints": "never" }
+        }
+      }
+    },
+    {
+      "title": "平均延迟",
+      "type": "timeseries",
+      "gridPos": { "h": 6, "w": 12, "x": 12, "y": 6 },
+      "targets": [
+        { "expr": "pipeline_stage_latency_avg_ns / 1e6", "legendFormat": "{{stage}}", "refId": "A" }
       ],
       "fieldConfig": {
         "defaults": {

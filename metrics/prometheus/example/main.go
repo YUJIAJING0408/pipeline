@@ -1,20 +1,24 @@
-// Command example 演示 Prometheus 子模块的接入方式。
+// Command example 演示树形多分支 Pipeline + Prometheus 子模块接入。
 //
-// 持续产生随机数据（每秒 ~300 条），供 Prometheus + Grafana 观察。
+// 拓扑：
 //
-// 运行前需在子模块目录执行 go mod tidy 拉取依赖：
+//	randSource（每秒 300 条）→ parse（string→OrderInfo, 0.5-2ms）
+//	                              ├── inventory（库存检查, 2-4ms, 3% 错误率）
+//	                              ├── payment（支付处理, 3-6ms, 5% 错误率）
+//	                              └── risk（风控审核, 4-8ms, 2% 错误率）
 //
-//	cd metrics/prometheus && go mod tidy && go run ./example
+// 运行：cd metrics/prometheus && go mod tidy && go run ./example
 package main
 
 import (
 	"context"
 	"fmt"
-	"log"
 	"math/rand"
 	"net/http"
 	"os"
 	"os/signal"
+	"strconv"
+	"strings"
 	"syscall"
 	"time"
 
@@ -24,25 +28,44 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
-// randSource 每秒产生约 300 条随机字符串，直到 ctx 取消。
+type OrderInfo struct {
+	ID      string
+	Product string
+	Amount  float64
+	Region  string
+}
+
+func (o OrderInfo) MergeKey() string { return o.ID }
+
+type branchResult struct {
+	Branch  string
+	OrderID string
+	Status  string
+	Detail  string
+}
+
 type randSource struct {
 	ratePerSec float64
+	counter    int
 }
 
 func (s *randSource) Start(ctx context.Context, out chan<- string) error {
 	interval := time.Duration(float64(time.Second) / s.ratePerSec)
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
-	words := []string{"order", "payment", "refund", "query", "login", "logout", "register", "report"}
+	products := []string{"laptop", "phone", "tablet", "watch", "headphone"}
+	regions := []string{"cn", "us", "eu", "jp"}
 	for {
 		select {
 		case <-ctx.Done():
 			return nil
 		case <-ticker.C:
-			word := words[rand.Intn(len(words))]
-			val := rand.Intn(10000)
+			s.counter++
+			product := products[rand.Intn(len(products))]
+			amount := float64(rand.Intn(20000)+500) / 10
+			region := regions[rand.Intn(len(regions))]
 			select {
-			case out <- fmt.Sprintf("%s:%d", word, val):
+			case out <- fmt.Sprintf("ORD-%05d:%s:%.1f:%s", s.counter, product, amount, region):
 			case <-ctx.Done():
 				return nil
 			}
@@ -50,62 +73,70 @@ func (s *randSource) Start(ctx context.Context, out chan<- string) error {
 	}
 }
 
-func main() {
-	// 1. 构建 Pipeline：parse（string→int） → transform（int→int） → sink。
-	s1 := pipeline.NewStage("parse", pipeline.StageConfig{Workers: 4, OutCap: 64}, nil, nil,
-		func(ctx context.Context, in string) (int, error) {
-			time.Sleep(time.Duration(rand.Intn(2000)) * time.Microsecond)
-			return len(in), nil
-		})
-	s1.NextStage("transform", pipeline.StageConfig{Workers: 4, OutCap: 64}, nil,
-		func(ctx context.Context, in int) (int, error) {
-			time.Sleep(time.Duration(rand.Intn(3000)) * time.Microsecond)
-			if rand.Intn(100) < 2 { // 2% 错误率
-				return 0, fmt.Errorf("random error")
-			}
-			return in * 10, nil
-		}).Sink(func(ctx context.Context, v int) {})
+func parseOrder(ctx context.Context, raw string) (OrderInfo, error) {
+	time.Sleep(time.Duration(500+rand.Intn(1500)) * time.Microsecond)
+	parts := strings.Split(raw, ":")
+	if len(parts) != 4 {
+		return OrderInfo{}, fmt.Errorf("invalid: %s", raw)
+	}
+	amount, _ := strconv.ParseFloat(parts[2], 64)
+	return OrderInfo{ID: parts[0], Product: parts[1], Amount: amount, Region: parts[3]}, nil
+}
 
-	pl := pipeline.New[string, int](pipeline.PipelineConfig{Name: "prometheus-demo"}).
-		AddStage(s1).
+func main() {
+	root := pipeline.NewStage("parse", pipeline.StageConfig{Workers: 4, OutCap: 64}, nil, nil, parseOrder)
+
+	root.NextStage("inventory", pipeline.StageConfig{Workers: 4, OutCap: 64}, nil,
+		func(ctx context.Context, o OrderInfo) (branchResult, error) {
+			time.Sleep(time.Duration(2000+rand.Intn(2000)) * time.Microsecond)
+			if rand.Intn(100) < 3 {
+				return branchResult{}, fmt.Errorf("库存不足: %s", o.Product)
+			}
+			return branchResult{Branch: "inventory", OrderID: o.ID, Status: "ok",
+				Detail: fmt.Sprintf("%s 充足", o.Product)}, nil
+		}).Sink(func(ctx context.Context, r branchResult) {})
+
+	root.NextStage("payment", pipeline.StageConfig{Workers: 4, OutCap: 64}, nil,
+		func(ctx context.Context, o OrderInfo) (branchResult, error) {
+			time.Sleep(time.Duration(3000+rand.Intn(3000)) * time.Microsecond)
+			if rand.Intn(100) < 5 {
+				return branchResult{}, fmt.Errorf("支付失败: 余额不足")
+			}
+			return branchResult{Branch: "payment", OrderID: o.ID, Status: "ok",
+				Detail: fmt.Sprintf("扣款 %.2f", o.Amount)}, nil
+		}).Sink(func(ctx context.Context, r branchResult) {})
+
+	root.NextStage("risk", pipeline.StageConfig{Workers: 4, OutCap: 64}, nil,
+		func(ctx context.Context, o OrderInfo) (branchResult, error) {
+			time.Sleep(time.Duration(4000+rand.Intn(4000)) * time.Microsecond)
+			if rand.Intn(100) < 2 {
+				return branchResult{}, fmt.Errorf("风控拒绝: 大额订单")
+			}
+			level := "低"
+			if o.Amount > 5000 {
+				level = "高"
+			}
+			return branchResult{Branch: "risk", OrderID: o.ID, Status: "ok",
+				Detail: fmt.Sprintf("风险 %s", level)}, nil
+		}).Sink(func(ctx context.Context, r branchResult) {})
+
+	pl := pipeline.New[string, OrderInfo](pipeline.PipelineConfig{Name: "order-pipeline"}).
+		AddStage(root).
 		Input(&randSource{ratePerSec: 300})
 
-	// 2. 创建 Prometheus Exporter 并注册。
 	exporter := promexporter.New(pl.MetricsMonitor())
 	prometheus.MustRegister(exporter)
 
-	// 3. 启动 HTTP 暴露 /metrics。
 	http.Handle("/metrics", promhttp.Handler())
 	go func() {
-		fmt.Println("Metrics HTTP 服务已启动: http://0.0.0.0:2112/metrics")
-		if err := http.ListenAndServe(":2112", nil); err != nil {
-			log.Fatal(err)
-		}
+		fmt.Println("Metrics: http://0.0.0.0:2112/metrics")
+		_ = http.ListenAndServe(":2112", nil)
 	}()
 
-	// 4. 运行 Pipeline 直到收到退出信号。
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	fmt.Println("Pipeline 已启动，每秒 ~300 条随机数据，等待 Prometheus 拉取…")
-	if err := pl.Run(ctx); err != nil {
-		log.Fatalf("run: %v", err)
-	}
-	if err := pl.Close(5 * time.Second); err != nil {
-		log.Fatalf("close: %v", err)
-	}
-	fmt.Println("Pipeline 已关闭")
-
-	// 4. 运行 Pipeline。
-	ctx, cancel := context.WithCancel(context.Background())
-	go func() {
-		time.Sleep(1800 * time.Second)
-		cancel()
-	}()
-	if err := pl.Run(ctx); err != nil {
-		log.Fatalf("run: %v", err)
-	}
-	if err := pl.Close(5 * time.Second); err != nil {
-		log.Fatalf("close: %v", err)
-	}
-	fmt.Println("Pipeline 已关闭")
+	fmt.Println("Pipeline: parse → {inventory, payment, risk} 每秒 ~300 条")
+	fmt.Println("Grafana: http://localhost:3000  Prometheus: http://localhost:9090")
+	_ = pl.Run(ctx)
+	_ = pl.Close(5 * time.Second)
 }
