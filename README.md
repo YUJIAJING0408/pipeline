@@ -33,9 +33,17 @@
 - **级联优雅关闭**：启动与关闭均从前往后，前驱完成关闭后经 `forwardCtx` 通知后继
 - **Channel 数据流通**：首节点 inchan 缓冲区由 `PipelineConfig.InputBufferSize` 配置，天然背压
 - **泛型 WorkerPool**：每个 Stage 内部并发处理，支持单条超时
-- **三模式错误策略**：FailFast / Collect / Retry+Fallback，`OnError` 回调，process panic 自动 recover
+- **三模式错误策略**：FailFast / Collect / Retry+Fallback，`OnError` 回调，process panic 自动 recover；
+  可全局配置（`Pipeline.ErrorPolicy()`）或按 Stage 覆盖（`StageConfig.ErrPolicy`）
+- **错误类型体系**：`StageError` 分类（超时/非法输入/业务/系统），`errors.Is/As` 判型，`WithCode` 标注
+- **死信队列**：失败数据投递 `DeadLetterSink`（默认 JSONL 落盘），`DrainDeadLetters` 读取 + 重放
+- **条件路由**：`NextStage` 的 `routeFn` 参数按条件分发给匹配分支（D-25）
+- **Keyed 汇聚**：`MergeNode` 按 `MergeKey` 凑齐多分支结果合并（D-26），支持多下游 + 路由
+- **生命周期钩子**：`StageHooks`（`OnBeforeProcess`/`OnAfterProcess`）注入 trace / 审计 / 限流
 - **JSON 结构化日志**：每 Stage 独立文件，四级日志级别（debug/info/warn/error）+ 结构化字段
-- **实时指标面板**：`MetricsServer` 基于标准库 HTTP + SSE 推送各 Stage 吞吐 / P50 / P99
+- **实时指标面板**：`MetricsServer` 基于标准库 HTTP + SSE 推送吞吐 / P50 / P99 / 队列深度 / 阻塞时长；
+  可独立端口运行，也可挂载到用户 HTTP 服务
+- **背压可视化**：`Monitor.Metrics()` 暴露队列深度与平均/累计阻塞时长，快速定位瓶颈（D-27）
 - **零第三方依赖**：纯标准库实现
 
 ## 快速开始
@@ -99,27 +107,33 @@ func main() {
 ## 目录结构
 
 ```
-├── stage.go          # Stage / StageConfig / NewStage / NextStage / Start / Close（对外 API）
+├── stage.go          # Stage / StageConfig / NewStage / NextStage / Attach / Start / Close（对外 API）
 ├── workerPool.go     # Stage 内部泛型工作池（不导出）
-├── pipeline.go       # Pipeline / PipelineConfig / New / AddStage / Run / Close（对外 API）
+├── pipeline.go       # Pipeline / PipelineConfig / New / AddStage / Run / Close / DrainDeadLetters（对外 API）
 ├── input.go          # InputSource / MockSource（对外 API）
 ├── errors.go         # ErrMode / ErrPolicy / StageError / 哨兵错误（对外 API）
 ├── logger.go         # StageLogger JSON 结构化日志（对外 API）
-├── monitor.go        # StageMonitor 分位数 / Monitor 汇总（对外 API）
-├── metrics.go        # MetricsServer 实时指标面板（HTTP + SSE，对外 API）
+├── monitor.go        # StageMonitor 分位数 / 背压指标 / Monitor 汇总（对外 API）
+├── metrics.go        # MetricsServer 实时指标面板（HTTP + SSE + 可挂载，对外 API）
+├── index.html        # MetricsServer 前端页面（//go:embed 嵌入）
 ├── deadletter.go     # DeadLetterSink 接口 + JSONL 落盘 + 重放（对外 API）
 ├── join.go           # MergeNode 条件汇聚：Keyed Fan-in（对外 API）
+├── version           # 版本号 + 更新项（CI 打 tag 读取）
+├── .github/workflows/ci.yml  # GitHub Actions：push 自动测试 + 打 tag
 └── examples/         # 可执行示例（basic/real/metrics/merge）
 ```
 
 ## 文档
 
-- [架构设计](./ARCHITECTURE.md)（权威设计文档，变更先改这里）
+- [架构设计](./ARCHITECTURE.md)（权威设计文档，含 ADR 决策记录）
 - [examples/basic](./examples/basic/) 最小可运行示例
+- [examples/real](./examples/real/) 树形分支 + 吞吐统计
 - [examples/metrics](./examples/metrics/) 实时指标面板演示
+- [examples/merge](./examples/merge/) Keyed 汇聚演示
 
 ## 状态
 
 核心链路已跑通：`NextStage 链式连接 → 递归 Start/Close → 输入源注入 → 级联优雅关闭`。
-JSON 结构化日志、三模式错误策略（含 panic recover）、实时指标面板（P50/P99/吞吐）、
-条件路由（D-25）、Keyed 汇聚（D-26）、死信队列、生命周期钩子——99 个测试（含集成/并发/泄漏）全部通过，Benchmark 零内存分配。
+JSON 结构化日志、三模式错误策略（含 panic recover、按 Stage 覆盖）、死信队列、条件路由（D-25）、
+Keyed 汇聚（D-26）、生命周期钩子、背压可视化（D-27）——101 个测试（含集成/并发/泄漏）全部通过，
+Benchmark 零内存分配。零第三方依赖。
