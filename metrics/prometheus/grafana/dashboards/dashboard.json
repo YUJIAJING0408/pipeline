@@ -1,0 +1,156 @@
+{
+  "title": "Pipeline 实时监控",
+  "uid": "pipeline-overview",
+  "tags": ["pipeline"],
+  "timezone": "browser",
+  "schemaVersion": 36,
+  "time": { "from": "now-5m", "to": "now" },
+  "refresh": "5s",
+  "panels": [
+    {
+      "title": "各 Stage 吞吐量",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 },
+      "targets": [
+        {
+          "expr": "pipeline_stage_throughput",
+          "legendFormat": "{{stage}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "reqps",
+          "min": 0,
+          "custom": { "drawStyle": "line", "lineInterpolation": "smooth", "showPoints": "never" }
+        }
+      }
+    },
+    {
+      "title": "P99 延迟",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 },
+      "targets": [
+        {
+          "expr": "pipeline_stage_latency_p99_ns / 1e6",
+          "legendFormat": "{{stage}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ms",
+          "min": 0,
+          "custom": { "drawStyle": "line", "lineInterpolation": "smooth", "showPoints": "never" }
+        }
+      }
+    },
+    {
+      "title": "队列积压",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 8 },
+      "targets": [
+        {
+          "expr": "pipeline_stage_queue_depth",
+          "legendFormat": "{{stage}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "min": 0,
+          "custom": { "drawStyle": "bars", "showPoints": "never" }
+        }
+      }
+    },
+    {
+      "title": "错误率",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 8 },
+      "targets": [
+        {
+          "expr": "rate(pipeline_stage_errors_total[1m])",
+          "legendFormat": "{{stage}} {{code}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "eps",
+          "min": 0,
+          "custom": { "drawStyle": "line", "lineInterpolation": "smooth", "showPoints": "never" }
+        }
+      }
+    },
+    {
+      "title": "路由投递 vs 过滤",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 16 },
+      "targets": [
+        {
+          "expr": "rate(pipeline_stage_route_accepted_total[1m])",
+          "legendFormat": "accepted {{stage}}",
+          "refId": "A"
+        },
+        {
+          "expr": "rate(pipeline_stage_route_rejected_total[1m])",
+          "legendFormat": "rejected {{stage}}",
+          "refId": "B"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "reqps",
+          "min": 0,
+          "custom": { "drawStyle": "line", "lineInterpolation": "smooth", "showPoints": "never" }
+        }
+      }
+    },
+    {
+      "title": "累计处理量",
+      "type": "stat",
+      "gridPos": { "h": 4, "w": 4, "x": 0, "y": 24 },
+      "targets": [
+        {
+          "expr": "sum(pipeline_stage_processed_total)",
+          "legendFormat": "总计",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": { "unit": "short", "color": { "mode": "fixed", "fixedColor": "green" } }
+      }
+    },
+    {
+      "title": "当前吞吐量",
+      "type": "stat",
+      "gridPos": { "h": 4, "w": 4, "x": 4, "y": 24 },
+      "targets": [
+        {
+          "expr": "sum(pipeline_stage_throughput)",
+          "legendFormat": "当前",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": { "unit": "reqps", "color": { "mode": "fixed", "fixedColor": "blue" } }
+      }
+    },
+    {
+      "title": "队列积压合计",
+      "type": "stat",
+      "gridPos": { "h": 4, "w": 4, "x": 8, "y": 24 },
+      "targets": [
+        {
+          "expr": "sum(pipeline_stage_queue_depth)",
+          "legendFormat": "积压",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": { "unit": "short", "color": { "mode": "fixed", "fixedColor": "orange" } }
+      }
+    }
+  ]
+}
