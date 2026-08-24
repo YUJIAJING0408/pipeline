@@ -123,6 +123,9 @@ type Stage[T1, T2 any] struct {
 	// fanoutRouteFuncs 每个子分支的路由条件（D-25），与 fanoutQueues 一一对应。
 	// nil = 放行所有数据到该分支；非 nil 则仅当 func(v) 返回 true 时投递。
 	fanoutRouteFuncs []func(T2) bool
+	// fanoutDefault 默认路由分支下标（D-32）：其他分支 routeFn 全不匹配时投递给它。
+	// -1 表示未设置（数据静默丢弃，旧行为）。
+	fanoutDefault int
 	// fanoutWG 广播转发协程（各分支转发 worker）的等待组。
 	fanoutWG sync.WaitGroup
 	// dispatcherWG dispatcher 广播协程（读 output → 投递队列）的等待组。
@@ -176,6 +179,8 @@ func NewStage[T1, T2 any](name string, cfg StageConfig, inputChan <-chan T1, rou
 		input:     inputChan,
 		output:    make(chan T2, outCap),
 		routeFunc: routeFn,
+		// -1 表示未设置默认路由分支（D-32）。
+		fanoutDefault: -1,
 	}
 }
 
@@ -229,6 +234,21 @@ func (s *Stage[T1, T2]) NextStage[T3 any](name string, cfg StageConfig, routeFn 
 	s.fanoutQueues = append(s.fanoutQueues, subQueue)
 	s.fanoutRouteFuncs = append(s.fanoutRouteFuncs, routeFn)
 	return subStage
+}
+
+// SetDefaultBranch 将某个子分支标记为默认路由（D-32）。
+//
+// 当其他分支的 routeFn 全部不匹配时，数据投递给默认分支（而非静默丢弃）。
+// 典型用法：路由分支（带 routeFn）+ 一个默认分支（nil 放行，作为兜底）。
+// 返回自身支持链式；默认分支必须在 NextStage 之后调用。
+func (s *Stage[T1, T2]) SetDefaultBranch(branch Stager) *Stage[T1, T2] {
+	for i, st := range s.subStages {
+		if st == branch {
+			s.fanoutDefault = i
+			return s
+		}
+	}
+	return s
 }
 
 func (s *Stage[T1, T2]) Describe(parent string) {
@@ -389,12 +409,22 @@ func (s *Stage[T1, T2]) startFanout() {
 			}
 		}()
 		for v := range s.output {
+			matched := false
 			for i, queue := range s.fanoutQueues {
+				// 跳过默认分支本身：它只在其他分支全不匹配时兜底接收（D-32）。
+				if i == s.fanoutDefault {
+					continue
+				}
 				// 路由条件检查（D-25）：routeFn 非 nil 且返回 false 时跳过此分支。
 				if s.fanoutRouteFuncs[i] != nil && !s.fanoutRouteFuncs[i](v) {
 					continue
 				}
 				s.fanoutSend(queue, v)
+				matched = true
+			}
+			// 默认路由分支（D-32）：其他分支 routeFn 全不匹配时投递给它，不静默丢弃。
+			if !matched && s.fanoutDefault >= 0 && s.fanoutDefault < len(s.fanoutQueues) {
+				s.fanoutSend(s.fanoutQueues[s.fanoutDefault], v)
 			}
 		}
 	}()

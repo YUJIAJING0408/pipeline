@@ -38,7 +38,7 @@
 - **重试指数退避**：`RetryBackoff` 乘数（100ms→200ms→400ms），上限 1h（D-31）
 - **错误类型体系**：`StageError` 分类（超时/非法输入/业务/系统），`errors.Is/As` 判型，`WithCode` 标注
 - **死信队列**：失败数据投递 `DeadLetterSink`（默认 JSONL 落盘），`DrainDeadLetters` 读取 + 重放
-- **条件路由**：`NextStage` 的 `routeFn` 参数按条件分发给匹配分支（D-25）
+- **条件路由**：`NextStage` 的 `routeFn` 参数按条件分发给匹配分支；`SetDefaultBranch` 兜底接收未匹配数据（D-25/D-32）
 - **Keyed 汇聚**：`MergeNode` 按 `MergeKey` 凑齐多分支结果合并（D-26），支持多下游 + 路由
 - **生命周期钩子**：`StageHooks`（`OnBeforeProcess`/`OnAfterProcess`）注入 trace / 审计 / 限流
 - **JSON 结构化日志**：每 Stage 独立文件，四级日志级别（debug/info/warn/error）+ 结构化字段

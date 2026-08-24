@@ -7,7 +7,8 @@
 //   - StageConfig：Workers/OutCap/Timeout/SlowThreshold/Hooks/ErrPolicy（按 Stage 覆盖错误策略）；
 //   - Stage.NextStage[T3]：类型安全的链式连接，父 Stage 输出类型 T2 强制作为子 Stage
 //     输入，可形成树形多分支拓扑；Fan-out 广播复制每条数据到所有子 Stage；
-//     routeFn 支持条件路由（D-25）；MergeNode 支持 Keyed 汇聚（D-26）；
+//     routeFn 支持条件路由（D-25）；SetDefaultBranch 兜底未匹配数据（D-32）；
+//     MergeNode 支持 Keyed 汇聚（D-26）；
 //   - Stage.Sink(fn)：叶子 Stage 将 process 结果直接交给消费函数，不写 output 通道，
 //     避免树形叶子背压死锁（D-21）；
 //   - Stage.Attach(st)：将外部节点（如 MergeNode）注册为生命周期子节点（D-26）；

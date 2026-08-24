@@ -369,3 +369,52 @@ func TestStageRouteFilter(t *testing.T) {
 		}
 	}
 }
+
+// TestStageRouteDefaultBranch 验证默认路由分支（D-32）：routeFn 全不匹配时投递默认分支。
+func TestStageRouteDefaultBranch(t *testing.T) {
+	in := make(chan int, 10)
+	s := NewStage("root", StageConfig{Workers: 2, OutCap: 10}, in, nil, func(ctx context.Context, x int) (int, error) {
+		return x, nil
+	})
+	// 分支 A：只接收负数。
+	childA := s.NextStage("neg", StageConfig{Workers: 1, OutCap: 10},
+		func(x int) bool { return x < 0 },
+		func(ctx context.Context, x int) (int, error) { return x, nil })
+	// 分支 B：默认兜底（nil routeFn）。
+	childB := s.NextStage("default", StageConfig{Workers: 1, OutCap: 10}, nil,
+		func(ctx context.Context, x int) (int, error) { return x, nil })
+	s.SetDefaultBranch(childB)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	if err := s.Start(ctx, nil); err != nil {
+		t.Fatal(err)
+	}
+	for _, x := range []int{-1, 1, -2, 2, 3} {
+		in <- x
+	}
+	close(in)
+	s.pool.wait()
+
+	// 分支 A 只收到负数（-1, -2）。
+	gotA := map[int]bool{}
+	for range 2 {
+		v := <-childA.output
+		gotA[v] = true
+	}
+	if !gotA[-1] || !gotA[-2] {
+		t.Errorf("neg 分支: got %v, want {-1,-2}", gotA)
+	}
+	// 分支 B（默认）收到正数（1, 2, 3）——负数被 A 接收，正数兜底到 B。
+	gotB := map[int]bool{}
+	for range 3 {
+		v := <-childB.output
+		gotB[v] = true
+	}
+	if !gotB[1] || !gotB[2] || !gotB[3] {
+		t.Errorf("default 分支: got %v, want {1,2,3}", gotB)
+	}
+	if gotB[-1] || gotB[-2] {
+		t.Errorf("default 分支不应收到负数（已由 neg 分支接收）: %v", gotB)
+	}
+}

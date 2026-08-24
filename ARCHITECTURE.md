@@ -63,6 +63,7 @@
 | D-29 限流器 | 已实现（7.5） | 内置令牌桶 `RateLimiter`（Allow 丢弃式 / Wait 背压式），`StageConfig.RateLimiter` 按 Stage 注入，process 前限流，保护下游慢依赖 |
 | D-30 MergeNode 可观测性 | 已实现（8.6） | `JoinConfig` 增加 `SlowThreshold`（merge 慢日志，D-22 对齐）/ `RateLimiter`（merge 前限流，D-29 对齐）/ `OnMergeError`（merge 失败回调，D-04 对齐）；MergeNode 接入 `stageMonitor`（Metrics/MetricsServer 可观测 merge 环节） |
 | D-31 重试退避 | 已实现（8.3） | `ErrPolicy.RetryBackoff`：第 n 次重试间隔 = `RetryDelay × Backoff^(n-1)`；0 或 1 = 固定间隔（兼容旧行为），>1 = 指数退避，降低对下游瞬时故障的冲击 |
+| D-32 默认路由分支 | 已实现（8.6） | `Stage.SetDefaultBranch(st)` 将某分支标记为默认兜底：当其他分支的 routeFn 全部不匹配时，数据投递给默认分支（不静默丢弃） |
 
 ### 已暂时排除的内容（YAGNI）
 
