@@ -50,6 +50,7 @@
   可独立端口运行，也可挂载到用户 HTTP 服务；面板含吞吐趋势折线图 + 整链路汇总行 + 错误分类列（D-33/D-34）
 - **便捷输出收集**：`Pipeline.Output(fn)` / `OutputChan()` 直接取根 Stage 最终结果；`SignalContext()` 一行优雅关闭（D-34）
 - **路由流量观测**：`routeAccepted`/`routeRejected` 计数，面板"收/拒"列定位路由异常（D-35）
+- **Prometheus 监控**：独立可选子模块 `metrics/prometheus`，`prometheus.Collector` 接口暴露 11 个指标，主库保持零依赖（D-37）
 - **背压可视化**：`Monitor.Metrics()` 暴露队列深度与平均/累计阻塞时长，快速定位瓶颈（D-27）
 - **拓扑校验**：`Pipeline.Validate()` 构建期检测环 / MergeNode 配置错误 / 孤立节点（D-28）
 - **内置限流器**：令牌桶 `RateLimiter`（Allow 丢弃式 / Wait 背压式），按 Stage 保护下游慢依赖（D-29）；MergeNode 同样支持（D-30）

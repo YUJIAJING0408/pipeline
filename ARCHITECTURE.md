@@ -68,6 +68,7 @@
 | D-34 输出收集与信号 | 已实现（1.0.9） | `Pipeline.Output(fn)` / `OutputChan()` 便捷收集根 Stage 输出；`SignalContext()` 封装 SIGINT/SIGTERM 优雅关闭；StageMetrics 增加 `ErrCodes` 错误分类计数（D-04 前端可视化） |
 | D-35 路由流量观测 | 已实现（1.1.0） | StageMonitor 记录 `routeAccepted`/`routeRejected`（扇出路由投递/过滤计数），MetricsServer 面板与汇总行展示"收/拒"列；支持排障定位路由异常 |
 | D-36 关闭一致性修复 | 已实现（1.1.0） | 重试等待中被 ctx 取消打断时补投死信（原静默丢失）；Merge 下游 Stage 透传 params（monitor/logger/errPol/deadLetter），面板不再盲区 |
+| D-37 Prometheus 监控 | 已实现（1.1.0） | 独立可选子模块 `metrics/prometheus`（`prometheus.Collector` 接口），基于 `Monitor.Metrics()` 快照暴露 11 个指标（含吞吐/延迟/错误分类/路由流量/背压）；`go get` 时仅拉取子模块依赖，主库保持零依赖 |
 
 ### 已暂时排除的内容（YAGNI）
 
