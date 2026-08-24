@@ -152,6 +152,7 @@ type stageEntry struct {
 	P99         int64   `json:"p99Ns"`
 	QueueDepth  int     `json:"queueDepth"`  // 当前输入队列积压条数（D-27）
 	BlockedTime int64   `json:"blockedTimeNs"` // 累计 output 写阻塞耗时（D-27）
+	ErrCodes    [5]uint64 `json:"errCodes"`  // 按 ErrorCode 分类的失败计数（D-04）
 }
 
 // snapshot 基于 Monitor.Metrics 构建推送帧并计算各 Stage 吞吐量。
@@ -195,6 +196,7 @@ func (ms *MetricsServer) snapshot() metricsJSON {
 			P99:         m.P99.Nanoseconds(),
 			QueueDepth:  m.QueueDepth,
 			BlockedTime: m.BlockedTime.Nanoseconds(),
+			ErrCodes:    m.ErrCodes,
 		})
 	}
 	// 整条链路汇总行（D-33）：聚合各 Stage 总量/吞吐/积压/阻塞，延迟取均值。
@@ -211,6 +213,10 @@ func (ms *MetricsServer) snapshot() metricsJSON {
 			latSum += st.MaxLatency
 			if st.MaxLatency > sum.MaxLatency {
 				sum.MaxLatency = st.MaxLatency
+			}
+			// 错误分类聚合（D-04）。
+			for c := range sum.ErrCodes {
+				sum.ErrCodes[c] += st.ErrCodes[c]
 			}
 		}
 		n := int64(len(frame.Stages))

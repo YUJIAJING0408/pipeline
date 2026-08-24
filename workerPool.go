@@ -161,6 +161,7 @@ func (wp *workerPool[In, Out]) handle(ctx context.Context, in In) {
 				wp.dlEnqueue(se, 0)
 				if wp.stageMonitor != nil {
 					wp.stageMonitor.record(time.Since(start), true)
+					wp.stageMonitor.recordCode(se.Code)
 				}
 				if wp.cancel != nil {
 					wp.cancel()
@@ -180,6 +181,7 @@ func (wp *workerPool[In, Out]) handle(ctx context.Context, in In) {
 						retryTimer.Stop()
 						if wp.stageMonitor != nil {
 							wp.stageMonitor.record(time.Since(start), true)
+							wp.stageMonitor.recordCode(se.Code)
 						}
 						return
 					case <-retryTimer.C:
@@ -228,12 +230,14 @@ func (wp *workerPool[In, Out]) handle(ctx context.Context, in In) {
 				wp.dlEnqueue(se, retried)
 				if wp.stageMonitor != nil {
 					wp.stageMonitor.record(time.Since(start), true)
+					wp.stageMonitor.recordCode(se.Code)
 				}
 				return // 最终失败，该条数据不进入下游
 			case ErrModeCollect:
 				wp.dlEnqueue(se, 0)
 				if wp.stageMonitor != nil {
 					wp.stageMonitor.record(time.Since(start), true)
+					wp.stageMonitor.recordCode(se.Code)
 				}
 				// 仅记录（已通过 onError/OnError 回调），继续处理下一条
 				return
@@ -243,6 +247,7 @@ func (wp *workerPool[In, Out]) handle(ctx context.Context, in In) {
 		wp.dlEnqueue(se, 0)
 		if wp.stageMonitor != nil {
 			wp.stageMonitor.record(time.Since(start), true)
+			wp.stageMonitor.recordCode(se.Code)
 		}
 		return // 处理失败，该条数据不进入下游
 	}

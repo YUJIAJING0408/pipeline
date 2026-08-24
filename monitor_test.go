@@ -103,3 +103,27 @@ func TestMonitorRunningRecord(t *testing.T) {
 		t.Errorf("errors = %d, want 0", errors)
 	}
 }
+
+// TestStageMonitorErrCodes 验证错误分类计数（D-04）。
+func TestStageMonitorErrCodes(t *testing.T) {
+	m := &StageMonitor{}
+	m.record(10*time.Millisecond, true)
+	m.recordCode(CodeTimeout)
+	m.record(5*time.Millisecond, true)
+	m.recordCode(CodeInvalidInput)
+	m.record(3*time.Millisecond, true)
+	m.recordCode(CodeTimeout)
+
+	codes := m.codeSnapshot()
+	if codes[CodeTimeout] != 2 {
+		t.Errorf("Timeout 计数 = %d, want 2", codes[CodeTimeout])
+	}
+	if codes[CodeInvalidInput] != 1 {
+		t.Errorf("InvalidInput 计数 = %d, want 1", codes[CodeInvalidInput])
+	}
+	// errors 总数与分类计数一致。
+	total, errs, _, _ := m.snapshot()
+	if total != 3 || errs != 3 {
+		t.Errorf("total=%d errors=%d, want 3/3", total, errs)
+	}
+}

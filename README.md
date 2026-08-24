@@ -1,5 +1,9 @@
 # pipeline
 
+<p align="center">
+  <img src="logo.png" alt="pipeline logo" width="200">
+</p>
+
 通用、类型安全的 Go 流水线（Pipeline）业务框架，以组件库形态交付。
 
 将复杂业务拆解为多个 **Stage** 串联，通过 `NextStage` 做类型安全的链式连接
@@ -43,7 +47,8 @@
 - **生命周期钩子**：`StageHooks`（`OnBeforeProcess`/`OnAfterProcess`）注入 trace / 审计 / 限流
 - **JSON 结构化日志**：每 Stage 独立文件，四级日志级别（debug/info/warn/error）+ 结构化字段
 - **实时指标面板**：`MetricsServer` 基于标准库 HTTP + SSE 推送吞吐 / P50 / P99 / 队列深度 / 阻塞时长；
-  可独立端口运行，也可挂载到用户 HTTP 服务；面板含吞吐趋势折线图 + 整链路汇总行（D-33）
+  可独立端口运行，也可挂载到用户 HTTP 服务；面板含吞吐趋势折线图 + 整链路汇总行 + 错误分类列（D-33/D-34）
+- **便捷输出收集**：`Pipeline.Output(fn)` / `OutputChan()` 直接取根 Stage 最终结果；`SignalContext()` 一行优雅关闭（D-34）
 - **背压可视化**：`Monitor.Metrics()` 暴露队列深度与平均/累计阻塞时长，快速定位瓶颈（D-27）
 - **拓扑校验**：`Pipeline.Validate()` 构建期检测环 / MergeNode 配置错误 / 孤立节点（D-28）
 - **内置限流器**：令牌桶 `RateLimiter`（Allow 丢弃式 / Wait 背压式），按 Stage 保护下游慢依赖（D-29）；MergeNode 同样支持（D-30）
@@ -138,5 +143,5 @@ func main() {
 
 核心链路已跑通：`NextStage 链式连接 → 递归 Start/Close → 输入源注入 → 级联优雅关闭`。
 JSON 结构化日志、三模式错误策略（含 panic recover、按 Stage 覆盖）、死信队列、条件路由（D-25）、
-Keyed 汇聚（D-26）、生命周期钩子、背压可视化（D-27）、拓扑校验（D-28）、内置限流器（D-29）、MergeNode 可观测性（D-30）、重试退避（D-31）、默认路由分支（D-32）、链路汇总指标（D-33）——122 个测试（含集成/并发/泄漏）全部通过，
+Keyed 汇聚（D-26）、生命周期钩子、背压可视化（D-27）、拓扑校验（D-28）、内置限流器（D-29）、MergeNode 可观测性（D-30）、重试退避（D-31）、默认路由分支（D-32）、链路汇总指标（D-33）、输出收集与信号（D-34）——125 个测试（含集成/并发/泄漏）全部通过，
 Benchmark 零内存分配。零第三方依赖。

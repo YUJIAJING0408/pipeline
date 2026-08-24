@@ -65,6 +65,7 @@
 | D-31 重试退避 | 已实现（8.3） | `ErrPolicy.RetryBackoff`：第 n 次重试间隔 = `RetryDelay × Backoff^(n-1)`；0 或 1 = 固定间隔（兼容旧行为），>1 = 指数退避，降低对下游瞬时故障的冲击 |
 | D-32 默认路由分支 | 已实现（8.6） | `Stage.SetDefaultBranch(st)` 将某分支标记为默认兜底：当其他分支的 routeFn 全部不匹配时，数据投递给默认分支（不静默丢弃） |
 | D-33 链路汇总指标 | 已实现（7.4） | `MetricsServer` SSE 帧增加 `Summary` 汇总行：聚合各 Stage 总量/吞吐/积压/阻塞，延迟取均值；前端表格高亮展示整链路状态 |
+| D-34 输出收集与信号 | 已实现（1.0.9） | `Pipeline.Output(fn)` / `OutputChan()` 便捷收集根 Stage 输出；`SignalContext()` 封装 SIGINT/SIGTERM 优雅关闭；StageMetrics 增加 `ErrCodes` 错误分类计数（D-04 前端可视化） |
 
 ### 已暂时排除的内容（YAGNI）
 

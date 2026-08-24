@@ -22,6 +22,9 @@ type StageMonitor struct {
 	maxLatency   time.Duration // 单条最大耗时（瓶颈定位）
 	lastLatency  time.Duration // 最近一次耗时
 
+	// errCodes 按 ErrorCode 分类的失败计数（D-04），下标 = ErrorCode 值。
+	errCodes [5]uint64
+
 	// 背压相关指标（D-27）。
 	blockedTime time.Duration // 累计 output 写阻塞耗时（高值 = 下游瓶颈）
 	depthFn     func() int    // 读取输入队列深度（Start 时设置，nil 时返回 0）
@@ -54,6 +57,24 @@ func (m *StageMonitor) record(latency time.Duration, failed bool) {
 	if m.sampleCount < sampleBufSize {
 		m.sampleCount++
 	}
+}
+
+// recordCode 记录一条失败的错误分类计数（D-04）。
+// 与 record(latency, true) 配合使用：record 统计总数，recordCode 统计分类分布。
+func (m *StageMonitor) recordCode(code ErrorCode) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if int(code) >= 0 && int(code) < len(m.errCodes) {
+		m.errCodes[code]++
+	}
+}
+
+// codeSnapshot 返回各错误分类的计数快照（下标 = ErrorCode 值）。
+func (m *StageMonitor) codeSnapshot() [5]uint64 {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	out := m.errCodes
+	return out
 }
 
 // recordBlocked 记录一次 output 写阻塞耗时（D-27，背压检测）。
@@ -190,6 +211,10 @@ type StageMetrics struct {
 	P99         time.Duration
 	QueueDepth  int           // 当前输入队列积压条数（D-27，背压检测）
 	BlockedTime time.Duration // 累计 output 写阻塞耗时（D-27，高值 = 下游瓶颈）
+
+	// ErrCodes 按 ErrorCode 分类的失败计数数组：[0]=Unknown [1]=Timeout
+	// [2]=InvalidInput [3]=Processing [4]=System（D-04，前端可视化）。
+	ErrCodes [5]uint64
 }
 
 // Metrics 聚合所有 Stage 的实时指标（含 P50/P99 分位数+背压指标），按注册顺序返回。
@@ -207,6 +232,7 @@ func (m *Monitor) Metrics() []StageMetrics {
 		total, errs, avg, max := sm.snapshot()
 		p50, p99 := sm.p50p99()
 		blocked := sm.blockedTimeSnapshot()
+		codes := sm.codeSnapshot()
 		out = append(out, StageMetrics{
 			StageName:   name,
 			Total:       total,
@@ -217,6 +243,7 @@ func (m *Monitor) Metrics() []StageMetrics {
 			P99:         p99,
 			QueueDepth:  sm.queueDepth(),
 			BlockedTime: blocked,
+			ErrCodes:    codes,
 		})
 	}
 	return out

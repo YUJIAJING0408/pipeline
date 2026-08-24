@@ -230,3 +230,57 @@ func TestMonitorConcurrent(t *testing.T) {
 	}
 	<-done
 }
+
+// TestPipelineOutput 验证 Output 回调收集根 Stage 输出。
+func TestPipelineOutput(t *testing.T) {
+	collected := make(chan int, 8)
+	root := NewStage("root", StageConfig{Workers: 2, OutCap: 8}, nil, nil,
+		func(ctx context.Context, x int) (int, error) { return x, nil })
+	pl := New[int, int](PipelineConfig{Name: "output"}).
+		AddStage(root).
+		Input(&MockSource[int]{Data: []int{1, 2, 3}}).
+		Output(func(v int) {
+			collected <- v
+		})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() { time.Sleep(50 * time.Millisecond); cancel() }()
+	_ = pl.Run(ctx)
+	_ = pl.Close(time.Second)
+
+	got := 0
+	deadline := time.After(time.Second)
+	for got < 3 {
+		select {
+		case <-collected:
+			got++
+		case <-deadline:
+			t.Fatalf("Output 收到 %d 条, want 3", got)
+		}
+	}
+}
+
+// TestPipelineOutputChan 验证 OutputChan 返回根输出通道只读视图。
+func TestPipelineOutputChan(t *testing.T) {
+	root := NewStage("root", StageConfig{Workers: 2, OutCap: 8}, nil, nil,
+		func(ctx context.Context, x int) (int, error) { return x, nil })
+	pl := New[int, int](PipelineConfig{Name: "outchan"}).
+		AddStage(root).
+		Input(&MockSource[int]{Data: []int{7}})
+	ch := pl.OutputChan()
+	if ch == nil {
+		t.Fatal("OutputChan 返回 nil")
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() { time.Sleep(30 * time.Millisecond); cancel() }()
+	_ = pl.Run(ctx)
+	select {
+	case v := <-ch:
+		if v != 7 {
+			t.Errorf("输出 = %d, want 7", v)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("OutputChan 超时")
+	}
+	_ = pl.Close(time.Second)
+}

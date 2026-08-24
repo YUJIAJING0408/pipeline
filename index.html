@@ -77,6 +77,7 @@
       <th>积压</th>
       <th>阻塞/条</th>
       <th>阻塞总</th>
+      <th>错误：超时/非法/处理/系统</th>
     </tr>
   </thead>
   <tbody id="rows"></tbody>
@@ -119,6 +120,18 @@
     return fmtDur(avg);
   }
 
+  // 错误分类：[0]Unknown [1]Timeout [2]InvalidInput [3]Processing [4]System
+  function fmtErrCodes(codes) {
+    if (!codes) return '<span class="zero">-</span>';
+    var parts = [];
+    if (codes[1] > 0) parts.push('超时<strong>:' + codes[1] + '</strong>');
+    if (codes[2] > 0) parts.push('非法<strong>:' + codes[2] + '</strong>');
+    if (codes[3] > 0) parts.push('处理<strong>:' + codes[3] + '</strong>');
+    if (codes[4] > 0) parts.push('系统<strong>:' + codes[4] + '</strong>');
+    if (codes[0] > 0) parts.push('未知<strong>:' + codes[0] + '</strong>');
+    return parts.length ? '<span class="err">' + parts.join(' ') + '</span>' : '<span class="zero">0</span>';
+  }
+
   function render(frame) {
     rowsEl.innerHTML = '';
     frame.stages.forEach(function (s) {
@@ -134,7 +147,8 @@
         '<td>' + fmtDur(s.maxLatencyNs) + '</td>' +
         '<td>' + fmtDepth(s.queueDepth) + '</td>' +
         '<td>' + fmtBlocked(s.blockedTimeNs, s.total) + '</td>' +
-        '<td>' + fmtDur(s.blockedTimeNs) + '</td>';
+        '<td>' + fmtDur(s.blockedTimeNs) + '</td>' +
+        '<td>' + fmtErrCodes(s.errCodes) + '</td>';
       rowsEl.appendChild(tr);
     });
     // 整链路汇总行（D-33）。
@@ -150,7 +164,8 @@
         '<td colspan="4">' + fmtDur(s.avgLatencyNs) + ' / ' + fmtDur(s.maxLatencyNs) + '（均/均）</td>' +
         '<td>' + fmtDepth(s.queueDepth) + '</td>' +
         '<td>-</td>' +
-        '<td>' + fmtDur(s.blockedTimeNs) + '</td>';
+        '<td>' + fmtDur(s.blockedTimeNs) + '</td>' +
+        '<td>' + fmtErrCodes(s.errCodes) + '</td>';
       rowsEl.appendChild(tr);
     }
     var t = new Date(frame.timestamp);

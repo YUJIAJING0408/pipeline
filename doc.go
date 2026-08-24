@@ -14,7 +14,7 @@
 //   - Stage.Attach(st)：将外部节点（如 MergeNode）注册为生命周期子节点（D-26）；
 //   - Pipeline[T1, T2]：编排层（T1=输入类型，T2=根 Stage 输入类型），AddStage 设置根
 //     Stage，管理输入源注入与级联优雅关闭；ErrorPolicy() 全局策略、MetricsMonitor /
-//     DrainDeadLetters 等扩展；
+//     DrainDeadLetters / Output / OutputChan 等扩展（D-34）；
 //   - Monitor：链路时间分析（各 Stage 记录 total/errors/latency + P50/P99 滑动窗口 +
 //     背压指标 QueueDepth/BlockedTime），GenerateSummary() / Format() / Metrics() 按需取用（D-02/D-27）；
 //   - MetricsServer：实时指标面板，HTTP + SSE 推送吞吐/P50/P99/队列深度/阻塞时长；

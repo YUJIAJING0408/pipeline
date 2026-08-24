@@ -102,6 +102,34 @@ func (p *Pipeline[T1, T2]) MetricsMonitor() *Monitor {
 	return p.monitor
 }
 
+// Output 收集根 Stage 的全部输出，回调处理最终结果（D-34）。
+//
+// 语义：启动一个 goroutine 消费根 Stage 的 output 通道，逐条调用 fn；
+// Pipeline 关闭（Close）后通道自动关闭，消费 goroutine 随退出。
+// 适合"链最终输出需要一个消费者"的场景：省去手工 OutChan + for-range goroutine。
+//
+// 注意：fn 内应尽快返回，避免成为处理瓶颈（消费 goroutine 单线程）。
+func (p *Pipeline[T1, T2]) Output(fn func(v T2)) *Pipeline[T1, T2] {
+	if p.stage == nil || fn == nil {
+		return p
+	}
+	go func() {
+		for v := range p.stage.output {
+			fn(v)
+		}
+	}()
+	return p
+}
+
+// OutputChan 返回根 Stage 输出通道的只读视图，调用方自行消费。
+// 与 Output 的区别：不启动消费 goroutine，由调用方控制消费节奏（如批量聚合）。
+func (p *Pipeline[T1, T2]) OutputChan() <-chan T2 {
+	if p.stage == nil {
+		return nil
+	}
+	return p.stage.output
+}
+
 // DrainDeadLetters 读取指定 Stage 的全部死信记录（读后不清除文件）。
 //
 // 适用默认 JSONL 落盘：目录取 DeadLetterConfig.Dir（未设置时用 LogDir）。
