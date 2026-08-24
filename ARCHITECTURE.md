@@ -798,20 +798,15 @@ Stage 与 MergeNode 的拓扑结构；遍历用 `map[Stager]int` 三色标记。
 
 ## 10. 未来扩展规划（预留扩展点）
 
-当前已实现**串行链 + 树形 Fork 多分支 + 条件路由 + Keyed 汇聚**（D-20/D-21/D-25/D-26），以下能力属于后续迭代：
+当前已实现**串行链 + 树形 Fork 多分支 + 条件路由 + Keyed 汇聚 + 拓扑校验**（D-20/D-21/D-25/D-26/D-28），以下能力属于后续迭代：
 
-| 扩展 | 现状 | 预留位置 |
-|------|------|----------|
-| Join（汇聚合并） | 已实现（D-26，8.6） | `MergeNode` 按 `MergeKey` 凑齐 N 分支后合并，`Attach` 挂生命周期；Keyed Join 已落地（数量分批在 `branchArr` 位图语义下天然正确） |
-| 条件路由（Router） | 已实现（D-25） | `NewStage` / `NextStage` 的 `routeFn func(T1) bool` 参数，父节点投递前检查，false 跳过 |
-| 持久化 / 调度 / 事件驱动 | 未实现 | 支持持久化状态恢复、定时/事件触发 Pipeline（当前为内存运行，输入源需用户自实现） |
-| 三模式错误策略 | 已实现（D-04） | Fail-Fast / Collect / Retry+Fallback 完整实现，通过 `Pipeline.ErrorPolicy()` 全局注入 |
-| 错误类型体系 | 已实现（8.4） | `StageError` 分类 + `errors.Is/As` 判型 + `WithCode` 标注 |
-| 死信队列 | 已实现（D-23，8.5） | `DeadLetterSink` 接口 + 默认 JSONL 落盘，`DrainDeadLetters` 读取 + `DeadLetterReplaySource` 重放 |
-| 生命周期钩子 | 已实现（D-24） | `StageHooks`：`OnBeforeProcess`（注入 ctx）/ `OnAfterProcess`（捕获 out/err/latency） |
-| StageLogger 独立日志 | 已实现（D-08） | 每 Stage 独立 JSON 结构化日志文件（`{stageName}.log`），Start 时创建、Close 时刷盘关闭；`LogEnabled` 开关 + `LogLevel` 四级过滤 |
-| Monitor 链路时间分析 | 已实现（D-02） | 各 Stage 记录 total/errors/latency + P50/P99 滑动窗口，`Metrics()`/`GenerateSummary()` 按需取用 |
-| 实时指标面板 | 已实现（7.4） | `MetricsServer` 标准库 HTTP + SSE 推送实时吞吐/延迟分位（`GET /` 页面 + `GET /metrics` 流） |
+| 版本 | 扩展 | 说明 |
+|------|------|------|
+| 1.1 | Prometheus 监控 | 独立可选子模块 `metrics/prometheus`（保持核心零依赖），`Monitor.Metrics()` 快照 → prometheus Collector，含吞吐/Gauge/Counter/Summary（P50/P99） |
+| 1.2 | 内置调度器 | `Pipeline.Schedule(cron)` 定时触发运行，支持 cron 表达式、防重叠、单次超时、错时捕获；标准库无 cron 解析器，需自实现 ~100 行 |
+| 2.0 | 持久化 / StateStore | `StateStore` 接口 + 文件默认实现 + InputSource 进度恢复（At-least-once）；已评估暂缓，用户可自行在 InputSource 内实现 offset |
+| 待定 | OTel 集成 | `StageHooks` 已支持手动注入 trace span，是否内置 OTel 与零依赖承诺冲突，暂缓 |
+| 待定 | DAG 一般化 | 从树形扩展到任意有向无环图（多入多出）；改造成本极高，可用多次 MergeNode 组合替代 |
 
 > 原则：**Stage 层保持纯业务，拓扑与并发调度全部下沉到 Pipeline 层**。当前已实现串行链与树形 Fork（多分支），未来可扩展为一般 DAG 图。
 
