@@ -59,6 +59,7 @@
 | D-25 条件路由 | 已实现 | `NewStage` / `NextStage` 的 `routeFn func(T1) bool` 参数（nil=放行）。父节点投递前检查子节点的 `routeFn`，false 则跳过该分支。零运行时开销：`fanoutRouteFuncs` 平行切片，编译期类型安全，无接口断言 |
 | D-26 条件汇聚（Keyed Fan-in） | 已实现（8.6） | `MergeNode` 按 `MergeKey` 凑齐 N 个分支结果后合并；单收集 goroutine 零锁 + 过期扫描清理 + **引用计数关闭**；`Attach` 注册生命周期子节点（不参与数据转发）；`NextStage` 支持多次调用创建多个下游分支，**routeFn** 支持条件路由（D-25） |
 | D-27 背压可视化 | 已实现（7.4） | `StageMonitor` 新增 `blockedTime` + `depthFn`，`Metrics()` 输出 `QueueDepth`/`BlockedTime`；MetricsServer SSE 帧含 `queueDepth`/`blockedTimeNs`；前端面板显示"积压/阻塞/条/阻塞总"四列 |
+| D-28 拓扑校验 | 已实现（9.1） | `Pipeline.Validate()` 构建期校验：数据流无环（DFS 三色）/ MergeNode 分支数匹配 / 生命周期已挂载 / 分支与下游不重复 / 无孤立节点；一次性返回全部错误 |
 
 ### 已暂时排除的内容（YAGNI）
 
@@ -762,6 +763,37 @@ func main() {
 }
 ```
 
+### 9.1 拓扑校验（D-28，构建期安全网）
+
+`Pipeline.Validate()` 在构建期检查拓扑合法性，将配置错误从"线上数据消失才排查"提前到"写代码时立即暴露"：
+
+```go
+pl := pipeline.New[string, int](pipeline.PipelineConfig{Name: "demo"}).
+    AddStage(root).Input(src)
+
+// 构建期校验：返回所有错误（一次性暴露，不逐个卡）
+if errs := pl.Validate(); len(errs) > 0 {
+    for _, e := range errs {
+        fmt.Println("拓扑错误:", e)
+    }
+    return
+}
+pl.Run(ctx)
+```
+
+| 校验项 | 说明 | 错误示例 |
+|--------|------|---------|
+| 数据流无环 | 从 root 沿数据流出边 DFS 三色标记，遇灰节点即环 | `cycle: s1 -> s2 -> s1` |
+| MergeNode 分支数匹配 | `len(Wire) == JoinConfig.Size` | `merge 'x': wired=2 size=3` |
+| MergeNode 生命周期已挂载 | 每个 Wire 的分支必须 `Attach` 了该 merge | `merge 'x' not attached to branch 'b1'` |
+| 分支不重复 | 同一分支 `Wire` 两次 | `duplicate branch in merge 'x'` |
+| 下游不重复 | 同一 Stage 被 `To/NextStage` 登记两次 | `duplicate downstream 'y'` |
+| 无孤立节点 | 被引用但不在 root 数据流图中 | `unreachable: ghost` |
+
+**内部实现**：`Stage.dataSubs []Stager` 记录仅 NextStage 创建的数据流子节点（Attach 不记录），
+配合 `topoNode` 接口（`topoDataOut`/`topoLifeOut`/`topoBranches`/`topoBranchReqs`）统一访问
+Stage 与 MergeNode 的拓扑结构；遍历用 `map[Stager]int` 三色标记。
+
 ---
 
 ## 10. 未来扩展规划（预留扩展点）
@@ -850,6 +882,7 @@ pipeline/
 ├── index.html             # MetricsServer 前端页面（//go:embed 嵌入 metrics.go）
 ├── deadletter.go          # DeadLetterSink 接口 + JSONL 实现 + ReplaySource（D-23）
 ├── join.go                # MergeNode 条件汇聚：Keyed Fan-in（D-26，Attach 生命周期子节点）
+├── validate.go            # Pipeline.Validate() 拓扑校验（D-28：环/分支/孤立/重复检测）
 │
 │   ── 测试（根包同目录 _test.go） ──
 ├── stage_test.go          # Stage 运行时测试（Start/Close/ctx 链/路由）
@@ -861,6 +894,7 @@ pipeline/
 ├── metrics_test.go        # 分位数 / SSE / 吞吐 / XSS / E2E 实时指标测试
 ├── deadletter_test.go     # JSONL / 自定义 sink / marshal 降级 / 重放测试
 ├── join_test.go           # 汇聚凑齐 / 缺分支泄漏 / 引用计数关闭 / E2E 测试
+├── validate_test.go       # 拓扑校验：环 / 分支数 / Attach / 重复 / 孤立 / 多错误
 ├── integration_test.go    # 高吞吐 / 背压 / panic 恢复 / goroutine 泄漏等集成测试
 ├── benchmark_test.go      # 单 Stage / 链式 / Worker 扩展性 / IO 密集型 Benchmark（0 allocs）
 │

@@ -107,6 +107,8 @@ type Stage[T1, T2 any] struct {
 	routeFunc func(T1) bool
 	// subStages 子 Stage 列表（递归 Start/Close 用）。
 	subStages []Stager
+	// dataSubs 仅 NextStage 创建的数据流子节点（D-28，拓扑校验/遍历用；Attach 不记录）。
+	dataSubs []Stager
 	// subOutChans 每个子 Stage 独立的输入 Channel（Fork Fan-out 广播，D-21）。
 	// 每条产出数据被复制分发到所有 subOutChans，各分支独立处理。
 	subOutChans []chan T2
@@ -217,6 +219,7 @@ func (s *Stage[T1, T2]) NextStage[T3 any](name string, cfg StageConfig, routeFn 
 	subIn := make(chan T2, max(cfg.OutCap, 0))
 	subStage := NewStage[T2, T3](name, cfg, subIn, routeFn, fn)
 	s.subStages = append(s.subStages, subStage)
+	s.dataSubs = append(s.dataSubs, subStage) // D-28：数据流子节点（拓扑校验用）
 	s.subOutChans = append(s.subOutChans, subIn)
 	// 每个子分支配一个有界转发队列（固定 worker 消费 → 写 subIn）。
 	subQueue := make(chan T2, max(cfg.OutCap, 0))
