@@ -1,7 +1,7 @@
 # pipeline
 
 <p align="center">
-  <img src="logo.png" alt="pipeline logo" width="200">
+  <img src="logo.png" alt="pipeline logo" width="1600">
 </p>
 
 通用、类型安全的 Go 流水线（Pipeline）业务框架，以组件库形态交付。
