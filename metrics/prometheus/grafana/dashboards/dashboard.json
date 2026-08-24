@@ -3,7 +3,7 @@
   "uid": "pipeline-overview",
   "tags": ["pipeline"],
   "timezone": "browser",
-  "schemaVersion": 36,
+  "schemaVersion": 39,
   "time": { "from": "now-5m", "to": "now" },
   "refresh": "5s",
   "panels": [
