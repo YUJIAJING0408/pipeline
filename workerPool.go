@@ -41,6 +41,8 @@ type workerPool[In, Out any] struct {
 	hooks *StageHooks
 	// dlWriter 死信队列写入器（D-23，非 nil 时失败数据落死信）。
 	dlWriter *deadLetterWriter
+	// rateLimiter 限流器（D-29，非 nil 时 process 前 Wait 限流）。
+	rateLimiter *RateLimiter
 	// cancel 取消 Stage 上下文的函数（FailFast 模式调用）。
 	cancel func()
 
@@ -106,6 +108,13 @@ func (wp *workerPool[In, Out]) handle(ctx context.Context, in In) {
 	if wp.hooks != nil && wp.hooks.OnBeforeProcess != nil {
 		if c := wp.hooks.OnBeforeProcess(ctx, in); c != nil {
 			procCtx = c
+		}
+	}
+
+	// 限流（D-29）：process 前取得令牌，Wait 背压式阻塞；ctx 取消时放弃该条。
+	if wp.rateLimiter != nil {
+		if err := wp.rateLimiter.Wait(procCtx); err != nil {
+			return // ctx 取消或等待中断：放弃处理该条
 		}
 	}
 

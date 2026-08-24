@@ -64,6 +64,9 @@ type StageConfig struct {
 	// ErrPolicy 为本 Stage 的错误策略（D-04）。非 nil 时覆盖全局策略，
 	// nil 时使用 Pipeline.ErrorPolicy() 注入的全局策略。
 	ErrPolicy *ErrPolicy
+	// RateLimiter 为本 Stage 的限流器（D-29）。nil = 不限流（零开销）。
+	// process 前调用限流器：Wait（背压式阻塞）或 Allow（丢弃式跳过）。
+	RateLimiter *RateLimiter
 }
 
 // StageHooks 定义 process 执行前后的生命周期回调（D-24）。
@@ -337,6 +340,7 @@ func (s *Stage[T1, T2]) Start(ctx context.Context, params map[string]any) error 
 	s.pool.errPol = s.errPol
 	s.pool.hooks = &s.config.Hooks
 	s.pool.dlWriter = s.dlWriter
+	s.pool.rateLimiter = s.config.RateLimiter
 	s.pool.cancel = s.forwardCancel
 	s.running.Store(true)
 	s.pool.start(s.ctx)

@@ -1,3 +1,2 @@
-1.0.2
-- 新增 Pipeline.Validate() 构建期拓扑校验（D-28）：数据流无环 / MergeNode 分支数匹配 / 生命周期已挂载 / 分支与下游不重复 / 无孤立节点，一次性返回全部错误
-- 新增 dataSubs 字段记录数据流子节点，支撑拓扑校验与遍历
+1.0.3
+- 新增内置令牌桶限流器 RateLimiter（D-29）：Allow（丢弃式）/ Wait（背压式），StageConfig.RateLimiter 按 Stage 接入，保护下游慢依赖

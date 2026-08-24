@@ -60,6 +60,7 @@
 | D-26 条件汇聚（Keyed Fan-in） | 已实现（8.6） | `MergeNode` 按 `MergeKey` 凑齐 N 个分支结果后合并；单收集 goroutine 零锁 + 过期扫描清理 + **引用计数关闭**；`Attach` 注册生命周期子节点（不参与数据转发）；`NextStage` 支持多次调用创建多个下游分支，**routeFn** 支持条件路由（D-25） |
 | D-27 背压可视化 | 已实现（7.4） | `StageMonitor` 新增 `blockedTime` + `depthFn`，`Metrics()` 输出 `QueueDepth`/`BlockedTime`；MetricsServer SSE 帧含 `queueDepth`/`blockedTimeNs`；前端面板显示"积压/阻塞/条/阻塞总"四列 |
 | D-28 拓扑校验 | 已实现（9.1） | `Pipeline.Validate()` 构建期校验：数据流无环（DFS 三色）/ MergeNode 分支数匹配 / 生命周期已挂载 / 分支与下游不重复 / 无孤立节点；一次性返回全部错误 |
+| D-29 限流器 | 已实现（7.5） | 内置令牌桶 `RateLimiter`（Allow 丢弃式 / Wait 背压式），`StageConfig.RateLimiter` 按 Stage 注入，process 前限流，保护下游慢依赖 |
 
 ### 已暂时排除的内容（YAGNI）
 
@@ -513,6 +514,27 @@ mux.Handle("/", ms.IndexHandler())
 - **实时监控**：打开 `http://host:port/` 即可看到各 Stage 实时吞吐与延迟分位（SSE 自动刷新）；
 - **背压定位**：观察"积压"列（队列深度）和"阻塞/条"列（平均写等待耗时），快速定位瓶颈 Stage。
 
+### 7.5 限流器（D-29）
+
+内置令牌桶限流器，保护下游慢依赖（第三方 API / 数据库连接池等有 QPS 上限的外部系统）：
+
+```go
+// 令牌桶：每秒补充 rate 个令牌，桶容量 burst（允许突发）
+limiter := pipeline.NewRateLimiter(100, 20) // 100/s，突发 20
+
+s := pipeline.NewStage("call-api", pipeline.StageConfig{
+    RateLimiter: limiter, // nil = 不限流（零开销）
+    Workers: 4, OutCap: 16,
+}, nil, nil, fn)
+
+// 两种限流语义
+func (rl *RateLimiter) Allow(ctx context.Context) bool // 丢弃式：令牌不足返回 false，数据跳过（进死信）
+func (rl *RateLimiter) Wait(ctx context.Context) error // 背压式：阻塞等待令牌，保持顺序（不可丢消息）
+```
+
+**实现**：`handle` 在 process 前调用限流器；`Wait` 支持 ctx 取消（限流等待超时与整体取消一致）。
+`Allow` 语义下被拒数据走正常错误路径（onError / 死信），不静默丢弃。
+
 ---
 
 ## 8. 错误处理策略
@@ -878,6 +900,7 @@ pipeline/
 ├── deadletter.go          # DeadLetterSink 接口 + JSONL 实现 + ReplaySource（D-23）
 ├── join.go                # MergeNode 条件汇聚：Keyed Fan-in（D-26，Attach 生命周期子节点）
 ├── validate.go            # Pipeline.Validate() 拓扑校验（D-28：环/分支/孤立/重复检测）
+├── ratelimit.go           # RateLimiter 令牌桶限流器（D-29：Allow/Wait）
 │
 │   ── 测试（根包同目录 _test.go） ──
 ├── stage_test.go          # Stage 运行时测试（Start/Close/ctx 链/路由）
@@ -890,6 +913,7 @@ pipeline/
 ├── deadletter_test.go     # JSONL / 自定义 sink / marshal 降级 / 重放测试
 ├── join_test.go           # 汇聚凑齐 / 缺分支泄漏 / 引用计数关闭 / E2E 测试
 ├── validate_test.go       # 拓扑校验：环 / 分支数 / Attach / 重复 / 孤立 / 多错误
+├── ratelimit_test.go      # 限流器：匀速 / 突发 / 并发 / Wait 超时 / Stage 集成
 ├── integration_test.go    # 高吞吐 / 背压 / panic 恢复 / goroutine 泄漏等集成测试
 ├── benchmark_test.go      # 单 Stage / 链式 / Worker 扩展性 / IO 密集型 Benchmark（0 allocs）
 │
@@ -911,7 +935,7 @@ pipeline/
 
 | 文件 | 归属包 | 导出性 | 职责 |
 |------|--------|--------|------|
-| `stage.go` / `pipeline.go` / `input.go` / `errors.go` / `logger.go` / `monitor.go` / `metrics.go` / `deadletter.go` / `join.go` | 根包 `pipeline` | 全部导出 | 对外 API 面 |
+| `stage.go` / `pipeline.go` / `input.go` / `errors.go` / `logger.go` / `monitor.go` / `metrics.go` / `deadletter.go` / `join.go` / `validate.go` / `ratelimit.go` | 根包 `pipeline` | 全部导出 | 对外 API 面 |
 | `workerPool.go` | 根包 `pipeline` | 不导出 | Stage 内部泛型工作池（D-15） |
 | `index.html` | 根包 `pipeline` | embed 内嵌 | MetricsServer 前端页面（`//go:embed`） |
 | `*_test.go`（含 benchmark_test.go） | 根包（同包测试） | 测试 | 白盒测试，可访问内部字段 |
