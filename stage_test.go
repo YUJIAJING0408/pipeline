@@ -418,3 +418,43 @@ func TestStageRouteDefaultBranch(t *testing.T) {
 		t.Errorf("default 分支不应收到负数（已由 neg 分支接收）: %v", gotB)
 	}
 }
+
+// TestStageRouteTrafficCount 验证路由流量计数（评审 #1）：accepted/rejected 正确累计。
+func TestStageRouteTrafficCount(t *testing.T) {
+	in := make(chan int, 10)
+	s := NewStage("root", StageConfig{Workers: 2, OutCap: 10}, in, nil, func(ctx context.Context, x int) (int, error) {
+		return x, nil
+	})
+	// 分支 A：只接收偶数。
+	childA := s.NextStage("even", StageConfig{Workers: 1, OutCap: 10},
+		func(x int) bool { return x%2 == 0 },
+		func(ctx context.Context, x int) (int, error) { return x, nil })
+	mon := NewMonitor()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	if err := s.Start(ctx, map[string]any{"monitor": mon}); err != nil {
+		t.Fatal(err)
+	}
+	for i := 1; i <= 4; i++ {
+		in <- i // 1,2,3,4
+	}
+	close(in)
+	s.pool.wait()
+	// 消费分支输出避免阻塞（driver 已 close，但 worker 写 out 可能阻塞）。
+	go func() { for range childA.output {
+	} }()
+
+	// 路由统计：偶数(2,4) 被接受 2 次；奇数(1,3) 被 routeFn 拒绝 2 次。
+	time.Sleep(100 * time.Millisecond) // 等 dispatcher 处理完
+	sm := mon.stages["root"]
+	if sm == nil {
+		t.Fatal("root 未注册到 monitor")
+	}
+	ok, rej := sm.routeSnapshot()
+	if ok != 2 {
+		t.Errorf("routeAccepted = %d, want 2（偶数 2,4 被接收）", ok)
+	}
+	if rej != 2 {
+		t.Errorf("routeRejected = %d, want 2（奇数 1,3 被过滤）", rej)
+	}
+}

@@ -66,6 +66,8 @@
 | D-32 默认路由分支 | 已实现（8.6） | `Stage.SetDefaultBranch(st)` 将某分支标记为默认兜底：当其他分支的 routeFn 全部不匹配时，数据投递给默认分支（不静默丢弃） |
 | D-33 链路汇总指标 | 已实现（7.4） | `MetricsServer` SSE 帧增加 `Summary` 汇总行：聚合各 Stage 总量/吞吐/积压/阻塞，延迟取均值；前端表格高亮展示整链路状态 |
 | D-34 输出收集与信号 | 已实现（1.0.9） | `Pipeline.Output(fn)` / `OutputChan()` 便捷收集根 Stage 输出；`SignalContext()` 封装 SIGINT/SIGTERM 优雅关闭；StageMetrics 增加 `ErrCodes` 错误分类计数（D-04 前端可视化） |
+| D-35 路由流量观测 | 已实现（1.1.0） | StageMonitor 记录 `routeAccepted`/`routeRejected`（扇出路由投递/过滤计数），MetricsServer 面板与汇总行展示"收/拒"列；支持排障定位路由异常 |
+| D-36 关闭一致性修复 | 已实现（1.1.0） | 重试等待中被 ctx 取消打断时补投死信（原静默丢失）；Merge 下游 Stage 透传 params（monitor/logger/errPol/deadLetter），面板不再盲区 |
 
 ### 已暂时排除的内容（YAGNI）
 

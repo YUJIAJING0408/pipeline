@@ -1,5 +1,4 @@
-1.0.9
-- Pipeline 新增 Output / OutputChan：便捷收集根 Stage 最终输出（D-34）
-- 新增 SignalContext()：封装 SIGINT/SIGTERM 优雅关闭信号（D-34）
-- 错误码可视化：Metrics/MetricsServer 暴露 ErrCodes 分类计数（超时/非法/处理/系统），前端面板新增分类列
-- README 插入 logo
+1.1.0
+- 路由流量计数（回顾 #1）：StageMonitor 记录 routeAccepted/routeRejected，MetricsServer 面板与汇总行展示"收/拒"列
+- 关闭瞬间重试死信（回顾 #2）：重试等待中被 ctx 取消打断时补投死信，不再静默丢失
+- Merge 下游 params 透传（回顾 #3）：merge.NextStage 下游获取 monitor/logger/errPol/deadLetter，监控面板不再盲区

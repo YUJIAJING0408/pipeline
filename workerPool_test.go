@@ -314,3 +314,37 @@ func TestWorkerPoolSlowThresholdZero(t *testing.T) {
 		t.Errorf("阈值 0 不应打印慢日志, got: %q", got)
 	}
 }
+
+// TestWorkerPoolRetryCloseDeadLetter 验证关闭瞬间重试中断也补投死信（评审 #2）。
+func TestWorkerPoolRetryCloseDeadLetter(t *testing.T) {
+	sink := &memSink{}
+	in := make(chan int, 1)
+	out := make(chan int, 1)
+	wp := newWorkerPool(1, in, out, func(ctx context.Context, x int) (int, error) {
+		return 0, errors.New("always fail")
+	}, 0, nil)
+	wp.stageName = "retry-close-dl"
+	wp.errPol = &ErrPolicy{
+		Mode:       ErrModeRetryFallback,
+		MaxRetry:   3,
+		RetryDelay: time.Hour, // 重试间隔超长：必然在等待中被 ctx 取消打断
+	}
+	wp.dlWriter = &deadLetterWriter{sink: sink, marshal: nil}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	wp.start(ctx)
+	in <- 1
+	close(in)
+	// 立即取消 ctx（不等重试 timer），验证中断路径补投死信。
+	time.Sleep(20 * time.Millisecond)
+	cancel()
+	wp.wait()
+
+	recs := sink.records()
+	if len(recs) != 1 {
+		t.Fatalf("关闭瞬间重试中断应补投 1 条死信, got %d", len(recs))
+	}
+	if recs[0].Retried != 0 {
+		t.Errorf("Retried = %d, want 0（等待首个重试间隔前即中断）", recs[0].Retried)
+	}
+}

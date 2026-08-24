@@ -78,6 +78,7 @@
       <th>阻塞/条</th>
       <th>阻塞总</th>
       <th>错误：超时/非法/处理/系统</th>
+      <th>路由 收/拒</th>
     </tr>
   </thead>
   <tbody id="rows"></tbody>
@@ -132,6 +133,13 @@
     return parts.length ? '<span class="err">' + parts.join(' ') + '</span>' : '<span class="zero">0</span>';
   }
 
+  // 扇出路由流量：accepted（成功投递）/ rejected（被 routeFn 过滤）
+  function fmtRoute(accepted, rejected) {
+    if (!accepted && !rejected) return '<span class="zero">-</span>';
+    var rej = (rejected > 0) ? '<span class="warn">' + rejected + '</span>' : rejected;
+    return accepted + ' / ' + rej;
+  }
+
   function render(frame) {
     rowsEl.innerHTML = '';
     frame.stages.forEach(function (s) {
@@ -148,7 +156,8 @@
         '<td>' + fmtDepth(s.queueDepth) + '</td>' +
         '<td>' + fmtBlocked(s.blockedTimeNs, s.total) + '</td>' +
         '<td>' + fmtDur(s.blockedTimeNs) + '</td>' +
-        '<td>' + fmtErrCodes(s.errCodes) + '</td>';
+        '<td>' + fmtErrCodes(s.errCodes) + '</td>' +
+        '<td>' + fmtRoute(s.routeAccepted, s.routeRejected) + '</td>';
       rowsEl.appendChild(tr);
     });
     // 整链路汇总行（D-33）。
@@ -165,7 +174,8 @@
         '<td>' + fmtDepth(s.queueDepth) + '</td>' +
         '<td>-</td>' +
         '<td>' + fmtDur(s.blockedTimeNs) + '</td>' +
-        '<td>' + fmtErrCodes(s.errCodes) + '</td>';
+        '<td>' + fmtErrCodes(s.errCodes) + '</td>' +
+        '<td>' + fmtRoute(s.routeAccepted, s.routeRejected) + '</td>';
       rowsEl.appendChild(tr);
     }
     var t = new Date(frame.timestamp);

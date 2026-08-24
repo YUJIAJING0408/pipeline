@@ -25,6 +25,11 @@ type StageMonitor struct {
 	// errCodes 按 ErrorCode 分类的失败计数（D-04），下标 = ErrorCode 值。
 	errCodes [5]uint64
 
+	// routeAccepted / routeRejected 扇出路由流量计数（评审 #1）：
+	// 父 Stage 产出数据经 routeFn 过滤后，成功投递分支数（accepted）vs 被过滤跳过数（rejected）。
+	routeAccepted uint64
+	routeRejected uint64
+
 	// 背压相关指标（D-27）。
 	blockedTime time.Duration // 累计 output 写阻塞耗时（高值 = 下游瓶颈）
 	depthFn     func() int    // 读取输入队列深度（Start 时设置，nil 时返回 0）
@@ -75,6 +80,26 @@ func (m *StageMonitor) codeSnapshot() [5]uint64 {
 	defer m.mu.Unlock()
 	out := m.errCodes
 	return out
+}
+
+// recordRouteAccepted / recordRouteRejected 记录扇出路由流量（评审 #1）。
+func (m *StageMonitor) recordRouteAccepted() {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.routeAccepted++
+}
+
+func (m *StageMonitor) recordRouteRejected() {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.routeRejected++
+}
+
+// routeSnapshot 返回扇出路由流量计数。
+func (m *StageMonitor) routeSnapshot() (accepted, rejected uint64) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.routeAccepted, m.routeRejected
 }
 
 // recordBlocked 记录一次 output 写阻塞耗时（D-27，背压检测）。
@@ -215,6 +240,11 @@ type StageMetrics struct {
 	// ErrCodes 按 ErrorCode 分类的失败计数数组：[0]=Unknown [1]=Timeout
 	// [2]=InvalidInput [3]=Processing [4]=System（D-04，前端可视化）。
 	ErrCodes [5]uint64
+
+	// RouteAccepted 扇出路由成功投递数（评审 #1）：每条被某分支接收的数据计 1 次。
+	RouteAccepted uint64
+	// RouteRejected 扇出路由被过滤跳过数（评审 #1）：routeFn 返回 false 累计。
+	RouteRejected uint64
 }
 
 // Metrics 聚合所有 Stage 的实时指标（含 P50/P99 分位数+背压指标），按注册顺序返回。
@@ -233,17 +263,20 @@ func (m *Monitor) Metrics() []StageMetrics {
 		p50, p99 := sm.p50p99()
 		blocked := sm.blockedTimeSnapshot()
 		codes := sm.codeSnapshot()
+		routeOK, routeNo := sm.routeSnapshot()
 		out = append(out, StageMetrics{
-			StageName:   name,
-			Total:       total,
-			Errors:      errs,
-			AvgLatency:  avg,
-			MaxLatency:  max,
-			P50:         p50,
-			P99:         p99,
-			QueueDepth:  sm.queueDepth(),
-			BlockedTime: blocked,
-			ErrCodes:    codes,
+			StageName:      name,
+			Total:          total,
+			Errors:         errs,
+			AvgLatency:     avg,
+			MaxLatency:     max,
+			P50:            p50,
+			P99:            p99,
+			QueueDepth:     sm.queueDepth(),
+			BlockedTime:    blocked,
+			ErrCodes:       codes,
+			RouteAccepted:  routeOK,
+			RouteRejected:  routeNo,
 		})
 	}
 	return out

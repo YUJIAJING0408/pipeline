@@ -417,14 +417,23 @@ func (s *Stage[T1, T2]) startFanout() {
 				}
 				// 路由条件检查（D-25）：routeFn 非 nil 且返回 false 时跳过此分支。
 				if s.fanoutRouteFuncs[i] != nil && !s.fanoutRouteFuncs[i](v) {
+					if s.stageMonitor != nil {
+						s.stageMonitor.recordRouteRejected()
+					}
 					continue
 				}
 				s.fanoutSend(queue, v)
 				matched = true
+				if s.stageMonitor != nil {
+					s.stageMonitor.recordRouteAccepted()
+				}
 			}
 			// 默认路由分支（D-32）：其他分支 routeFn 全不匹配时投递给它，不静默丢弃。
 			if !matched && s.fanoutDefault >= 0 && s.fanoutDefault < len(s.fanoutQueues) {
 				s.fanoutSend(s.fanoutQueues[s.fanoutDefault], v)
+				if s.stageMonitor != nil {
+					s.stageMonitor.recordRouteAccepted()
+				}
 			}
 		}
 	}()

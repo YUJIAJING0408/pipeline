@@ -179,6 +179,8 @@ func (wp *workerPool[In, Out]) handle(ctx context.Context, in In) {
 					select {
 					case <-ctx.Done():
 						retryTimer.Stop()
+						// 关闭瞬间重试中断：该条最终失败，补投死信（评审 #2）。
+						wp.dlEnqueue(se, retried)
 						if wp.stageMonitor != nil {
 							wp.stageMonitor.record(time.Since(start), true)
 							wp.stageMonitor.recordCode(se.Code)

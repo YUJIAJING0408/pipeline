@@ -361,8 +361,10 @@ func (j *MergeNode[T]) doStart(ctx context.Context, params map[string]any) error
 		}
 	}()
 	// 启动下游 subStages（NextStage 创建的下游 Stage，merge 输出已就绪）。
+	// 透传 params（评审 #3）：monitor/logger/errPol/deadLetter 可被下游 Stage 使用，
+	// 否则 Merge 下游在监控面板是盲区。
 	for _, st := range j.subStages {
-		if err := st.Start(j.ctx, nil); err != nil {
+		if err := st.Start(j.ctx, params); err != nil {
 			return err
 		}
 	}

@@ -153,6 +153,8 @@ type stageEntry struct {
 	QueueDepth  int     `json:"queueDepth"`  // 当前输入队列积压条数（D-27）
 	BlockedTime int64   `json:"blockedTimeNs"` // 累计 output 写阻塞耗时（D-27）
 	ErrCodes    [5]uint64 `json:"errCodes"`  // 按 ErrorCode 分类的失败计数（D-04）
+	RouteAccepted uint64  `json:"routeAccepted"` // 扇出路由成功投递数（评审 #1）
+	RouteRejected uint64  `json:"routeRejected"` // 扇出路由被过滤跳过数（评审 #1）
 }
 
 // snapshot 基于 Monitor.Metrics 构建推送帧并计算各 Stage 吞吐量。
@@ -197,6 +199,8 @@ func (ms *MetricsServer) snapshot() metricsJSON {
 			QueueDepth:  m.QueueDepth,
 			BlockedTime: m.BlockedTime.Nanoseconds(),
 			ErrCodes:    m.ErrCodes,
+			RouteAccepted: m.RouteAccepted,
+			RouteRejected: m.RouteRejected,
 		})
 	}
 	// 整条链路汇总行（D-33）：聚合各 Stage 总量/吞吐/积压/阻塞，延迟取均值。
@@ -218,6 +222,9 @@ func (ms *MetricsServer) snapshot() metricsJSON {
 			for c := range sum.ErrCodes {
 				sum.ErrCodes[c] += st.ErrCodes[c]
 			}
+			// 路由流量聚合（评审 #1）。
+			sum.RouteAccepted += st.RouteAccepted
+			sum.RouteRejected += st.RouteRejected
 		}
 		n := int64(len(frame.Stages))
 		sum.AvgLatency = avgSum / n

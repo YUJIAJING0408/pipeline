@@ -522,3 +522,40 @@ func TestJoinNodeMonitor(t *testing.T) {
 	}
 	_ = b.Close(time.Second)
 }
+
+// TestJoinNodeDownstreamParamPassthrough 验证 Merge 下游 Stage 透传 params（评审 #3）：
+// 下游可收到 monitor，纳入监控面板（不再盲区）。
+func TestJoinNodeDownstreamParamPassthrough(t *testing.T) {
+	in := make(chan keyedItem, 8)
+	b := NewStage("b", StageConfig{Workers: 1, OutCap: 8}, in, nil,
+		func(ctx context.Context, x keyedItem) (keyedItem, error) { return x, nil })
+
+	join := NewMergeNode("merge", JoinConfig[keyedItem]{Size: 1},
+		func(ctx context.Context, batch []keyedItem) (keyedItem, error) { return batch[0], nil })
+	join.Wire(b)
+	b.Attach(join)
+	// 下游 stage 由 merge.NextStage 创建。
+	downstream := join.NextStage("downstream", StageConfig{Workers: 1, OutCap: 8}, nil,
+		func(ctx context.Context, x keyedItem) (keyedItem, error) { return x, nil })
+
+	mon := NewMonitor()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	if err := b.Start(ctx, map[string]any{"monitor": mon}); err != nil {
+		t.Fatal(err)
+	}
+
+	// 下游应已注册到同一个 Monitor（params 透传生效）。
+	metrics := mon.Metrics()
+	found := false
+	for _, m := range metrics {
+		if m.StageName == "downstream" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("Merge 下游未透传 params 到 Monitor, metrics = %+v", metrics)
+	}
+	_ = downstream
+	_ = b.Close(time.Second)
+}
