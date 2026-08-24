@@ -2,10 +2,11 @@ package pipeline
 
 import (
 	"context"
-	_ "embed" // 供 //go:embed 指令使用（嵌入 index.html 字符串）
+	_ "embed"
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strconv"
 	"sync"
 	"time"
 )
@@ -41,7 +42,7 @@ func (ms *MetricsServer) interval() time.Duration {
 	return ms.RefreshInterval
 }
 
-// Handler 返回该服务绑定的完整 HTTP Handler（包含主页 + SSE 流），便于测试复用或挂载到用户服务器。
+// Handler 返回该服务绑定的完整 HTTP Handler（包含主页 + SSE 流 + healthz），便于测试复用或挂载到用户服务器。
 //
 // 挂载到用户服务器示例：
 //
@@ -52,6 +53,7 @@ func (ms *MetricsServer) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", ms.handleIndex)
 	mux.HandleFunc("/metrics", ms.handleSSE)
+	mux.HandleFunc("/healthz", ms.handleHealthz)
 	return mux
 }
 
@@ -63,6 +65,12 @@ func (ms *MetricsServer) IndexHandler() http.HandlerFunc {
 // MetricsHandler 返回仅处理 SSE 流（GET /metrics）的 HTTP Handler，可单独挂载到用户服务器的自定义路径。
 func (ms *MetricsServer) MetricsHandler() http.HandlerFunc {
 	return ms.handleSSE
+}
+
+// HealthHandler 返回健康检查（GET /healthz）的 HTTP Handler，供 k8s 存活/就绪探针使用。
+// Pipeline 运行时返回 200 {"status":"ok"}；未运行或 Monitor 无注册 Stage 时返回 503。
+func (ms *MetricsServer) HealthHandler() http.HandlerFunc {
+	return ms.handleHealthz
 }
 
 // Start 启动 HTTP 监听（阻塞）。调用方应另起 goroutine 运行，或使用 Shutdown 优雅停止。
@@ -123,6 +131,24 @@ func (ms *MetricsServer) handleSSE(w http.ResponseWriter, r *http.Request) {
 			ms.sendSnapshot(w, flusher)
 		}
 	}
+}
+
+// handleHealthz 健康检查端点：Pipeline 运行时返回 200，否则 503。
+func (ms *MetricsServer) handleHealthz(w http.ResponseWriter, _ *http.Request) {
+	if ms.Monitor == nil {
+		w.WriteHeader(http.StatusServiceUnavailable)
+		_, _ = w.Write([]byte(`{"status":"error","msg":"monitor not configured"}`))
+		return
+	}
+	metrics := ms.Monitor.Metrics()
+	if len(metrics) == 0 {
+		w.WriteHeader(http.StatusServiceUnavailable)
+		_, _ = w.Write([]byte(`{"status":"error","msg":"pipeline not running"}`))
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write([]byte(`{"status":"ok","stages":` + strconv.Itoa(len(metrics)) + `}`))
 }
 
 // relayHeaders 设置 SSE 所需响应头。

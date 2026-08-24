@@ -1,5 +1,2 @@
-1.1.0
-- 路由流量计数（回顾 #1）：StageMonitor 记录 routeAccepted/routeRejected，MetricsServer 面板与汇总行展示"收/拒"列
-- 关闭瞬间重试死信（回顾 #2）：重试等待中被 ctx 取消打断时补投死信，不再静默丢失
-- Merge 下游 params 透传（回顾 #3）：merge.NextStage 下游获取 monitor/logger/errPol/deadLetter，监控面板不再盲区
-- Prometheus 监控子模块：独立可选子模块 metrics/prometheus（prometheus.Collector 接口），基于 Monitor.Metrics() 快照暴露 11 个指标，主库保持零依赖（D-37）
+1.1.1
+- MetricsServer 新增 /healthz 健康检查端点 + HealthHandler()，供 k8s 存活/就绪探针使用

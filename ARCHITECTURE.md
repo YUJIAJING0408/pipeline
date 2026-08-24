@@ -506,13 +506,14 @@ logs/
 ms := &pipeline.MetricsServer{Monitor: pl.MetricsMonitor(), Addr: ":8080"}
 go ms.Start()
 
-// 方式二：挂载到用户自己的 HTTP 服务（完整路由）
+// 方式二：挂载到用户自己的 HTTP 服务（完整路由，含 /healthz）
 mux := http.NewServeMux()
 mux.Handle("/pipeline/", http.StripPrefix("/pipeline", ms.Handler()))
 
-// 方式三：只挂载 SSE 流或主页
+// 方式三：只挂载 SSE 流 / 主页 / 健康检查
 mux.Handle("/metrics", ms.MetricsHandler())
 mux.Handle("/", ms.IndexHandler())
+mux.Handle("/healthz", ms.HealthHandler()) // k8s 存活/就绪探针
 ```
 
 应用场景：

@@ -20,7 +20,8 @@
 //     GenerateSummary() / Format() / Metrics() 按需取用（D-02/D-27/D-35）；
 //   - MetricsServer：实时指标面板，HTTP + SSE 推送吞吐/P50/P99/队列深度/阻塞时长；
 //     可独立端口运行，也可通过 Handler/IndexHandler/MetricsHandler 挂载到用户 HTTP 服务；
-//     面板含吞吐趋势折线图 + 整链路汇总行（D-33）（7.4）；
+//     HealthHandler 提供 /healthz 健康检查（k8s 存活/就绪探针）；
+//     面板含吞吐趋势折线图 + 整链路汇总行 + 错误分类列（D-33/D-34）；
 //   - 三模式错误策略：FailFast（取消 ctx 传播）/ Collect（记录跳过）/ RetryFallback
 //     （重试+降级，支持 RetryBackoff 指数退避 D-31），通过 Pipeline.ErrorPolicy() 全局注入，
 //     或 StageConfig.ErrPolicy 按 Stage 覆盖；
