@@ -49,6 +49,12 @@
   td.err { color: var(--err); font-weight: 700; }
   td.zero { color: var(--muted); }
   .footer { margin-top: 16px; color: var(--muted); font-size: 12px; }
+  .chart-wrap { margin-top: 20px; background: var(--panel); border-radius: 8px; padding: 14px; }
+  .chart-title { color: var(--muted); font-size: 13px; margin-bottom: 8px; }
+  #trend { width: 100%; height: auto; display: block; }
+  .legend { display: flex; flex-wrap: wrap; gap: 8px 16px; margin-top: 8px; font-size: 12px; }
+  .legend-item { color: var(--muted); display: inline-flex; align-items: center; gap: 5px; }
+  .legend-dot { width: 10px; height: 3px; border-radius: 2px; display: inline-block; }
 </style>
 </head>
 <body>
@@ -73,6 +79,10 @@
   </thead>
   <tbody id="rows"></tbody>
 </table>
+<div class="chart-wrap">
+  <div class="chart-title">吞吐趋势（最近 60 帧）</div>
+  <canvas id="trend" width="900" height="240"></canvas>
+</div>
 <div class="footer">数据由后端 SSE 推送 · 积压=输入队列深度 · 阻塞/条=平均每条 output 写等待耗时 · 阻塞总=累计阻塞耗时</div>
 
 <script>
@@ -136,6 +146,105 @@
     return div.innerHTML;
   }
 
+  // ── 吞吐趋势图（canvas 折线，保留最近 60 帧）──
+  var MAX_POINTS = 60;
+  var TICK_MARGIN = 40;  // 左侧留白，绘制刻度
+  var hist = {};         // stage → 吞吐历史数组
+  var legendEl = document.createElement('div');
+  legendEl.className = 'legend';
+  document.querySelector('.chart-wrap').appendChild(legendEl);
+
+  var PALETTE = ['#38bdf8', '#34d399', '#fbbf24', '#f472b6', '#a78bfa', '#fb7185', '#4ade80', '#facc15'];
+
+  function redrawTrend() {
+    var canvas = document.getElementById('trend');
+    var wrap = document.querySelector('.chart-wrap');
+    // 适配容器宽度，保持 2.5:1 aspect。
+    canvas.width = wrap.clientWidth;
+    canvas.height = Math.round(wrap.clientWidth / 2.5);
+    var ctx = canvas.getContext('2d');
+    var W = canvas.width, H = canvas.height;
+
+    ctx.clearRect(0, 0, W, H);
+    ctx.fillStyle = '#16233a';
+    ctx.fillRect(0, 0, W, H);
+
+    // 收集所有 stage 的点数以计算 Y 轴范围。
+    var names = Object.keys(hist);
+    if (names.length === 0) return;
+
+    var maxV = 1;
+    names.forEach(function (n) {
+      if (hist[n] && hist[n].length) {
+        var m = Math.max.apply(null, hist[n]);
+        if (m > maxV) maxV = m;
+      }
+    });
+    maxV = Math.max(1, Math.ceil(maxV * 1.1));
+
+    var plotW = W - TICK_MARGIN - 8;
+    var plotH = H - 24;
+
+    // Y 轴刻度和网格。
+    ctx.strokeStyle = '#2c3e56';
+    ctx.fillStyle = '#94a3b8';
+    ctx.font = '11px monospace';
+    for (var g = 0; g <= 4; g++) {
+      var y = 4 + (plotH * g / 4);
+      ctx.beginPath();
+      ctx.moveTo(TICK_MARGIN, y);
+      ctx.lineTo(W - 4, y);
+      ctx.stroke();
+      var val = (maxV * (1 - g / 4)).toFixed(0);
+      ctx.fillText(val, 2, y + 4);
+    }
+    ctx.fillText('0s', TICK_MARGIN, H - 4);
+    ctx.fillText('-' + MAX_POINTS + ' 帧', 2, H - 4);
+
+    // 每个 stage 一条折线。
+    names.forEach(function (n, idx) {
+      var data = hist[n];
+      if (!data || data.length < 2) return;
+      var color = PALETTE[idx % PALETTE.length];
+      ctx.strokeStyle = color;
+      ctx.lineWidth = 1.6;
+      ctx.beginPath();
+      data.forEach(function (v, i) {
+        // 最新点在右端：i=0 在左，i=MAX_POINTS-1 在右。
+        var sx = TICK_MARGIN + (plotW * i / (MAX_POINTS - 1));
+        var sy = 4 + plotH * (1 - v / maxV);
+        if (i === 0) ctx.moveTo(sx, sy);
+        else ctx.lineTo(sx, sy);
+      });
+      ctx.stroke();
+    });
+
+    // 图例。
+    legendEl.innerHTML = '';
+    names.forEach(function (n, idx) {
+      var item = document.createElement('span');
+      item.className = 'legend-item';
+      item.innerHTML = '<span class="legend-dot" style="background:' + PALETTE[idx % PALETTE.length] + '"></span>' +
+        escapeHtml(n);
+      legendEl.appendChild(item);
+    });
+  }
+
+  function updateTrend(frame) {
+    frame.stages.forEach(function (s) {
+      if (!hist[s.name]) hist[s.name] = [];
+      hist[s.name].push(s.throughput);
+      if (hist[s.name].length > MAX_POINTS) hist[s.name].shift();
+    });
+    // 移除已不存在的 stage。
+    var live = {};
+    frame.stages.forEach(function (s) { live[s.name] = true; });
+    Object.keys(hist).forEach(function (n) {
+      if (!live[n]) delete hist[n];
+    });
+    redrawTrend();
+  }
+
   var es = new EventSource('/metrics');
   es.onopen = function () {
     statusEl.textContent = '已连接，等待数据…';
@@ -143,7 +252,9 @@
   };
   es.onmessage = function (e) {
     try {
-      render(JSON.parse(e.data));
+      var frame = JSON.parse(e.data);
+      render(frame);
+      updateTrend(frame);
     } catch (err) {
       statusEl.textContent = '数据解析失败: ' + err.message;
       statusEl.className = 'reconnecting';
@@ -153,6 +264,13 @@
     statusEl.textContent = '连接断开，自动重连中…';
     statusEl.className = 'reconnecting';
   };
+
+  // 窗口尺寸变化时重绘（canvas 依赖容器宽度）。
+  var resizeTimer = null;
+  window.addEventListener('resize', function () {
+    clearTimeout(resizeTimer);
+    resizeTimer = setTimeout(redrawTrend, 150);
+  });
 })();
 </script>
 </body>

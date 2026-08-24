@@ -43,7 +43,7 @@
 - **生命周期钩子**：`StageHooks`（`OnBeforeProcess`/`OnAfterProcess`）注入 trace / 审计 / 限流
 - **JSON 结构化日志**：每 Stage 独立文件，四级日志级别（debug/info/warn/error）+ 结构化字段
 - **实时指标面板**：`MetricsServer` 基于标准库 HTTP + SSE 推送吞吐 / P50 / P99 / 队列深度 / 阻塞时长；
-  可独立端口运行，也可挂载到用户 HTTP 服务
+  可独立端口运行，也可挂载到用户 HTTP 服务；面板含吞吐趋势折线图
 - **背压可视化**：`Monitor.Metrics()` 暴露队列深度与平均/累计阻塞时长，快速定位瓶颈（D-27）
 - **拓扑校验**：`Pipeline.Validate()` 构建期检测环 / MergeNode 配置错误 / 孤立节点（D-28）
 - **内置限流器**：令牌桶 `RateLimiter`（Allow 丢弃式 / Wait 背压式），按 Stage 保护下游慢依赖（D-29）；MergeNode 同样支持（D-30）

@@ -1,2 +1,2 @@
-1.0.5
-- ErrPolicy 新增 RetryBackoff 指数退避（D-31）：第 n 次重试间隔 = RetryDelay × Backoff^(n-1)，上限 1h；Backoff ≤ 1 兼容固定间隔
+1.0.6
+- 监控面板新增吞吐趋势折线图：canvas 原生 JS，保留最近 60 帧，每 Stage 独立彩色折线 + 图例，窗口自适应
