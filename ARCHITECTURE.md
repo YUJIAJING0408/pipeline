@@ -69,6 +69,7 @@
 | D-35 路由流量观测 | 已实现（1.1.0） | StageMonitor 记录 `routeAccepted`/`routeRejected`（扇出路由投递/过滤计数），MetricsServer 面板与汇总行展示"收/拒"列；支持排障定位路由异常 |
 | D-36 关闭一致性修复 | 已实现（1.1.0） | 重试等待中被 ctx 取消打断时补投死信（原静默丢失）；Merge 下游 Stage 透传 params（monitor/logger/errPol/deadLetter），面板不再盲区 |
 | D-37 Prometheus 监控 | 已实现（1.1.0） | 独立可选子模块 `metrics/prometheus`（`prometheus.Collector` 接口），基于 `Monitor.Metrics()` 快照暴露 11 个指标（含吞吐/延迟/错误分类/路由流量/背压）；`go get` 时仅拉取子模块依赖，主库保持零依赖 |
+| D-38 日志轮转 | 已实现（1.1.2） | `StageLogger` 支持按大小/数量/天数轮转：`LogRotation{MaxSizeMB, MaxBackups, MaxAgeDays}`（均 0 = 关闭，保持旧行为）；写入时检测大小超限触发轮转，旧文件按 `{stage}.log.N` 后缀推移，超数量删除 + 超天数清理（详见 7.1） |
 
 ### 已暂时排除的内容（YAGNI）
 
@@ -449,13 +450,20 @@ Pipeline.Close(timeout)  →  根 Stage.Close(timeout)
 - 级别控制：`PipelineConfig.LogLevel` 静态配置，`StageLogger.SetLevel()` 运行期动态调整；
 - 写日志 API：`Debugf/Infof/Warnf/Errorf`（格式化）+ `Debugw/Infow/Warnw/Errorw`（结构化字段 + `F(key, value)`）；`Printf` 保留兼容（等价 Info）；
 - 并发安全：写文件由内部 mutex 串行化；字段含无法序列化值（chan/func）时降级为仅 msg 行。
+- **日志轮转（D-38）**：`StageLogger` 可通过 `LogRotation` 配置轮转策略，防止单文件无限增长：
+  - `MaxSizeMB`：单文件达到该大小（MB）后触发轮转（0 = 不按大小轮转，默认保持旧行为）；
+  - `MaxBackups`：保留的轮转文件数量（`.log.1` ~ `.log.N`，超过即删除最旧，0 = 保留全部）；
+  - `MaxAgeDays`：轮转文件最长保留天数（按修改时间清理过期文件，0 = 不按天数清理）；
+  - 三个维度独立可配可关，满足"按大小封顶 / 按份数封顶 / 按时间过期"三种常见运维策略；
+  - 轮转动作在写入临界区内完成（同步刷盘 → 按 `{stage}.log.N → N+1` 推移 → 当前文件变 `.log.1` → 新建空文件），不额外加锁，不丢日志行。
 
 ```
 logs/
-├── stage-source.log        ← Stage 1 日志
-├── stage-transform.log     ← Stage 2 日志
-├── stage-filter.log        ← Stage 3 日志
-└── stage-x.dl.jsonl        ← 死信队列文件（D-23，启用死信时按 Stage 生成）
+├── stage-filter.log.3     ← 最旧备份（超过 MaxBackups / MaxAgeDays 被清理）
+├── stage-filter.log.2     ← 旧备份
+├── stage-filter.log.1     ← 上一份满量日志
+├── stage-filter.log       ← 当前活跃文件
+└── stage-x.dl.jsonl       ← 死信队列文件（D-23，启用死信时按 Stage 生成）
 ```
 
 > 注：链路汇总报告（`Monitor.Format()`）为按需调用，不再自动落盘。

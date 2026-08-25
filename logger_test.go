@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -270,4 +271,215 @@ func TestStageCloseLog(t *testing.T) {
 	if !strings.Contains(data, `"stage":"s"`) {
 		t.Errorf("close 事件应为 JSON 且含 stage 字段，got: %s", data)
 	}
+}
+
+// bigFields 构造一条足够大的日志行（padSize 控制字段大小），用于快速触发轮转。
+func bigFields(padSize int) []LogField {
+	return []LogField{F("pad", strings.Repeat("x", padSize))}
+}
+
+// listBackups 返回 {stage}.log.N 后缀文件的文件名切片（不含主文件）。
+func listBackups(t *testing.T, dir, stage string) []string {
+	t.Helper()
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatalf("读取目录失败: %v", err)
+	}
+	prefix := stage + ".log."
+	var backups []string
+	for _, e := range entries {
+		if strings.HasPrefix(e.Name(), prefix) {
+			backups = append(backups, e.Name())
+		}
+	}
+	return backups
+}
+
+// TestStageLoggerRotationBySize 验证单文件达到 MaxSizeMB 后触发轮转（产生 .log.1）。
+func TestStageLoggerRotationBySize(t *testing.T) {
+	dir := t.TempDir()
+	l, err := NewStageLoggerWithRotation("stage-r", dir, LogLevelInfo, LogRotation{MaxSizeMB: 1})
+	if err != nil {
+		t.Fatalf("NewStageLoggerWithRotation 失败: %v", err)
+	}
+	defer l.Close()
+
+	// 每条约 128KB（字段 + JSON 开销），写 12 条 ≈1.5MB 确保超过 1MB 阈值并轮转。
+	for i := 0; i < 12; i++ {
+		l.Infow("big", bigFields(128*1024)...)
+	}
+	if err := l.Sync(); err != nil {
+		t.Fatalf("Sync 失败: %v", err)
+	}
+
+	backups := listBackups(t, dir, "stage-r")
+	if len(backups) == 0 {
+		t.Fatal("达到大小阈值后应产生轮转备份文件，got 0")
+	}
+	if _, err := os.Stat(filepath.Join(dir, "stage-r.log")); err != nil {
+		t.Errorf("主文件应存在: %v", err)
+	}
+}
+
+// TestStageLoggerRotationShift 验证多次轮转后缀依次推移（.log.1 → .log.2，新备份成为 .log.1）。
+func TestStageLoggerRotationShift(t *testing.T) {
+	dir := t.TempDir()
+	l, err := NewStageLoggerWithRotation("stage-s", dir, LogLevelInfo, LogRotation{MaxSizeMB: 1})
+	if err != nil {
+		t.Fatalf("NewStageLoggerWithRotation 失败: %v", err)
+	}
+	defer l.Close()
+
+	// 写 3 批（每批超过 1MB），应产生 .log.1 与 .log.2。
+	for b := 0; b < 3; b++ {
+		for i := 0; i < 5; i++ {
+			l.Infow("big", bigFields(128*1024)...)
+		}
+		_ = l.Sync()
+	}
+
+	backups := listBackups(t, dir, "stage-s")
+	if len(backups) < 2 {
+		t.Fatalf("应产生至少 2 个备份，got %v", backups)
+	}
+
+	// 最新备份的内容应与最后一次写入一致；.log.2 存在说明 .log.1 被推移。
+	if size := fileSize(t, filepath.Join(dir, "stage-s.log.1")); size == 0 {
+		t.Error(".log.1 不应为空（当前轮转所得）")
+	}
+	if size := fileSize(t, filepath.Join(dir, "stage-s.log.2")); size == 0 {
+		t.Error(".log.2 不应为空（旧 .log.1 被推移）")
+	}
+}
+
+// TestStageLoggerRotationMaxBackups 验证超过 MaxBackups 后最旧备份被删除。
+func TestStageLoggerRotationMaxBackups(t *testing.T) {
+	dir := t.TempDir()
+	l, err := NewStageLoggerWithRotation("stage-m", dir, LogLevelInfo, LogRotation{MaxSizeMB: 1, MaxBackups: 2})
+	if err != nil {
+		t.Fatalf("NewStageLoggerWithRotation 失败: %v", err)
+	}
+	defer l.Close()
+
+	// 写 4 批（每批超过 1MB），超过保留上限 2 个。
+	for b := 0; b < 4; b++ {
+		for i := 0; i < 5; i++ {
+			l.Infow("big", bigFields(128*1024)...)
+		}
+		_ = l.Sync()
+	}
+
+	backups := listBackups(t, dir, "stage-m")
+	if len(backups) > 2 {
+		t.Fatalf("超过 MaxBackups=2 应删除最旧备份，got %v", backups)
+	}
+}
+
+// TestStageLoggerRotationMaxAge 验证超过 MaxAgeDays 的备份被清理。
+func TestStageLoggerRotationMaxAge(t *testing.T) {
+	dir := t.TempDir()
+	// 先手动造一个"过期"备份：立即创建 .log.1 并回拨 mtime 到 10 天前。
+	old := filepath.Join(dir, "stage-a.log.1")
+	if err := os.WriteFile(old, []byte("stale"), 0o644); err != nil {
+		t.Fatalf("创建过期备份失败: %v", err)
+	}
+	past := time.Now().Add(-10 * 24 * time.Hour)
+	if err := os.Chtimes(old, past, past); err != nil {
+		t.Fatalf("回拨 mtime 失败: %v", err)
+	}
+
+	// MaxAgeDays=3：轮转时旧备份超过 3 天应被删除。
+	l, err := NewStageLoggerWithRotation("stage-a", dir, LogLevelInfo, LogRotation{MaxSizeMB: 1, MaxAgeDays: 3})
+	if err != nil {
+		t.Fatalf("NewStageLoggerWithRotation 失败: %v", err)
+	}
+	defer l.Close()
+
+	for i := 0; i < 12; i++ {
+		l.Infow("big", bigFields(128*1024)...)
+	}
+	_ = l.Sync()
+
+	// 过期备份经轮转推移为 .log.2 后被按天清理；.log.1 此时为新轮转内容（不检查）。
+	if _, err := os.Stat(filepath.Join(dir, "stage-a.log.2")); err == nil {
+		t.Error("超过 MaxAgeDays 的过期备份（推移到 .log.2）应被清理")
+	}
+}
+
+// TestStageLoggerNoRotation 验证旧构造函数 NewStageLogger 不启用轮转（兼容旧行为）。
+func TestStageLoggerNoRotation(t *testing.T) {
+	dir := t.TempDir()
+	l, err := NewStageLogger("stage-n", dir, LogLevelInfo)
+	if err != nil {
+		t.Fatalf("NewStageLogger 失败: %v", err)
+	}
+	defer l.Close()
+
+	for i := 0; i < 5; i++ {
+		l.Infow("big", bigFields(128*1024)...)
+	}
+	_ = l.Sync()
+
+	if backups := listBackups(t, dir, "stage-n"); len(backups) != 0 {
+		t.Errorf("旧构造函数不应产生轮转备份，got %v", backups)
+	}
+	// 主文件仍完整可读。
+	if size := fileSize(t, filepath.Join(dir, "stage-n.log")); size == 0 {
+		t.Error("主文件不应为空")
+	}
+}
+
+// TestStageLoggerRotationConcurrent 验证并发写入 + 轮转下无 race（由 -race 检测），且行数不丢。
+func TestStageLoggerRotationConcurrent(t *testing.T) {
+	dir := t.TempDir()
+	l, err := NewStageLoggerWithRotation("stage-c", dir, LogLevelInfo, LogRotation{MaxSizeMB: 1, MaxBackups: 2})
+	if err != nil {
+		t.Fatalf("NewStageLoggerWithRotation 失败: %v", err)
+	}
+	defer l.Close()
+
+	const goroutines = 8
+	const per = 200
+	var wg sync.WaitGroup
+	for g := 0; g < goroutines; g++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for i := 0; i < per; i++ {
+				l.Infow("c", bigFields(2*1024)...)
+			}
+		}()
+	}
+	wg.Wait()
+	_ = l.Sync()
+
+	// 所有行必须落盘（主文件 + 备份行数合计 = goroutines × per + 1 空行不计）。
+	total := 0
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatalf("读取目录失败: %v", err)
+	}
+	for _, e := range entries {
+		if e.Name() == "stage-c.log" || strings.HasPrefix(e.Name(), "stage-c.log.") {
+			data := mustReadLog(t, filepath.Join(dir, e.Name()))
+			for _, line := range strings.Split(strings.TrimSpace(data), "\n") {
+				if line != "" {
+					total++
+				}
+			}
+		}
+	}
+	if total != goroutines*per {
+		t.Fatalf("轮转后行数 = %d, want %d（不应丢行）", total, goroutines*per)
+	}
+}
+
+// fileSize 返回文件字节数（不存在返回 0）。
+func fileSize(t *testing.T, path string) int64 {
+	t.Helper()
+	info, err := os.Stat(path)
+	if err != nil {
+		return 0
+	}
+	return info.Size()
 }

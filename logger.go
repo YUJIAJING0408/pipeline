@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
 )
@@ -74,6 +76,17 @@ type logLine struct {
 	Fields map[string]any `json:"fields,omitempty"`
 }
 
+// LogRotation 描述 StageLogger 文件的轮转策略（D-38）。
+// 三个维度独立可配可关（均为 0 时关闭轮转，保持旧行为）：
+//   - MaxSizeMB：单文件大小上限（MiB），达到即轮转；
+//   - MaxBackups：保留的轮转文件数量（{stage}.log.1 ~ .N），超过删除最旧；0 = 保留全部；
+//   - MaxAgeDays：轮转文件最长保留天数（按修改时间清理），0 = 不按天数清理。
+type LogRotation struct {
+	MaxSizeMB  int
+	MaxBackups int
+	MaxAgeDays int
+}
+
 // StageLogger 管理单个 Stage 的独立日志文件（D-08），输出 JSON 结构化日志。
 //
 // 约定：日志目录下每个 Stage 一个文件，命名 {stageName}.log；
@@ -85,12 +98,23 @@ type StageLogger struct {
 	level LogLevel
 	path  string // 日志文件完整路径，便于外部定位
 
-	mu sync.Mutex // 串行化写文件 + Sync
+	maxSizeBytes int64         // 轮转大小阈值（字节），0 关闭
+	maxBackups   int           // 保留轮转文件数，0 保留全部
+	maxAge       time.Duration // 轮转文件保留时长，0 不按天数清理
+	size         int64         // 当前文件已写字节数
+
+	mu sync.Mutex // 串行化写文件 + Sync + 轮转
 }
 
-// NewStageLogger 在 dir 下创建 {dir}/{stageName}.log 并返回对应 Logger。
+// NewStageLogger 在 dir 下创建 {dir}/{stageName}.log 并返回对应 Logger（不启用轮转）。
 // dir 不存在时自动创建（MkdirAll）。
 func NewStageLogger(stageName, dir string, level LogLevel) (*StageLogger, error) {
+	return NewStageLoggerWithRotation(stageName, dir, level, LogRotation{})
+}
+
+// NewStageLoggerWithRotation 在 dir 下创建 {dir}/{stageName}.log，并按 rotation 配置轮转（D-38）。
+// dir 不存在时自动创建（MkdirAll）；rotation 全零等价于 NewStageLogger。
+func NewStageLoggerWithRotation(stageName, dir string, level LogLevel, rotation LogRotation) (*StageLogger, error) {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return nil, err
 	}
@@ -99,11 +123,20 @@ func NewStageLogger(stageName, dir string, level LogLevel) (*StageLogger, error)
 	if err != nil {
 		return nil, err
 	}
+	info, _ := f.Stat()
+	var cur int64
+	if info != nil {
+		cur = info.Size()
+	}
 	return &StageLogger{
-		file:  f,
-		stage: stageName,
-		level: level,
-		path:  path,
+		file:         f,
+		stage:        stageName,
+		level:        level,
+		path:         path,
+		maxSizeBytes: int64(rotation.MaxSizeMB) * 1024 * 1024,
+		maxBackups:   rotation.MaxBackups,
+		maxAge:       time.Duration(rotation.MaxAgeDays) * 24 * time.Hour,
+		size:         cur,
 	}, nil
 }
 
@@ -179,7 +212,7 @@ func fieldMap(fields []LogField) map[string]any {
 	return m
 }
 
-// write 序列化一行 JSON 并追加写入文件（并发安全，级别过滤）。
+// write 序列化一行 JSON 并追加写入文件（并发安全，级别过滤；达到大小阈值时先轮转再写入）。
 func (l *StageLogger) write(level LogLevel, msg string, fields map[string]any) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
@@ -199,7 +232,97 @@ func (l *StageLogger) write(level LogLevel, msg string, fields map[string]any) {
 		data = []byte(fmt.Sprintf(`{"ts":%q,"stage":%q,"level":%q,"msg":%q}`,
 			line.TS, line.Stage, line.Level, line.Msg))
 	}
+	if l.maxSizeBytes > 0 && l.size+int64(len(data)) > l.maxSizeBytes {
+		l.rotateLocked()
+	}
 	_, _ = l.file.Write(append(data, '\n'))
+	l.size += int64(len(data))
+}
+
+// rotateLocked 执行一次轮转：当前文件变 .log.1，旧备份依次后移，超过 MaxBackups 删除最旧，
+// 并按 MaxAgeDays 清理过期文件（调用方需持有 mu）。
+func (l *StageLogger) rotateLocked() {
+	_ = l.file.Sync()
+	_ = l.file.Close()
+
+	if l.maxBackups > 0 {
+		// 删除超过保留上限的最旧备份（先删，避免后移时它成为 .N+1 游离文件）。
+		_ = os.Remove(l.seqPath(l.maxBackups + 1))
+		for i := l.maxBackups; i >= 1; i-- {
+			if _, err := os.Stat(l.seqPath(i)); err == nil {
+				_ = os.Rename(l.seqPath(i), l.seqPath(i+1))
+			}
+		}
+	} else {
+		// 不限份数：后移所有已存在的备份。
+		for i := l.maxSeq(); i >= 1; i-- {
+			if _, err := os.Stat(l.seqPath(i)); err == nil {
+				_ = os.Rename(l.seqPath(i), l.seqPath(i+1))
+			}
+		}
+	}
+	_ = os.Rename(l.path, l.seqPath(1))
+
+	l.cleanupByAge()
+
+	f, err := os.OpenFile(l.path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+	if err != nil {
+		l.file = nil // 打开失败时标记不可写，后续写调用由调用方自行感知
+		return
+	}
+	l.file = f
+	l.size = 0
+}
+
+// seqPath 返回第 n 个备份文件路径（{path}.n）。
+func (l *StageLogger) seqPath(n int) string {
+	return fmt.Sprintf("%s.%d", l.path, n)
+}
+
+// maxSeq 扫描目录返回当前最大的备份序号（MaxBackups=0 不限份数时用于后移）。
+func (l *StageLogger) maxSeq() int {
+	entries, err := os.ReadDir(filepath.Dir(l.path))
+	if err != nil {
+		return 0
+	}
+	prefix := l.stage + ".log."
+	max := 0
+	for _, e := range entries {
+		name := e.Name()
+		if name == l.stage+".log" || !strings.HasPrefix(name, prefix) {
+			continue
+		}
+		if n, err := strconv.Atoi(strings.TrimPrefix(name, prefix)); err == nil && n > max {
+			max = n
+		}
+	}
+	return max
+}
+
+// cleanupByAge 删除修改时间超过 maxAge 的轮转备份文件（best-effort）。
+func (l *StageLogger) cleanupByAge() {
+	if l.maxAge <= 0 {
+		return
+	}
+	entries, err := os.ReadDir(filepath.Dir(l.path))
+	if err != nil {
+		return
+	}
+	cutoff := time.Now().Add(-l.maxAge)
+	prefix := l.stage + ".log."
+	for _, e := range entries {
+		name := e.Name()
+		if name == l.stage+".log" || !strings.HasPrefix(name, prefix) {
+			continue
+		}
+		info, err := e.Info()
+		if err != nil {
+			continue
+		}
+		if info.ModTime().Before(cutoff) {
+			_ = os.Remove(filepath.Join(filepath.Dir(l.path), name))
+		}
+	}
 }
 
 // Path 返回日志文件的完整路径。
@@ -209,6 +332,9 @@ func (l *StageLogger) Path() string { return l.path }
 func (l *StageLogger) Sync() error {
 	l.mu.Lock()
 	defer l.mu.Unlock()
+	if l.file == nil {
+		return os.ErrClosed
+	}
 	return l.file.Sync()
 }
 
@@ -216,6 +342,9 @@ func (l *StageLogger) Sync() error {
 func (l *StageLogger) Close() error {
 	l.mu.Lock()
 	defer l.mu.Unlock()
+	if l.file == nil {
+		return nil
+	}
 	if err := l.file.Sync(); err != nil {
 		return err
 	}

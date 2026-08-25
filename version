@@ -1,2 +1,2 @@
-1.1.1
-- MetricsServer 新增 /healthz 健康检查端点 + HealthHandler()，供 k8s 存活/就绪探针使用
+1.1.2
+- 日志轮转（D-38）：StageLogger 支持 LogRotation 按大小（MaxSizeMB）/ 份数（MaxBackups）/ 天数（MaxAgeDays）轮转清理，防止单文件无限增长
