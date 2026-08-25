@@ -301,11 +301,14 @@ func (s *Stage[T1, T2]) Start(ctx context.Context, params map[string]any) error 
 				if lv, ok := params["logLevel"].(LogLevel); ok {
 					level = lv
 				}
-				rotation := LogRotation{}
+				cfg := LogConfig{Level: level}
 				if rot, ok := params["logRotation"].(LogRotation); ok {
-					rotation = rot
+					cfg.Rotation = rot
 				}
-				if l, err := NewStageLoggerWithRotation(s.name, dir, level, rotation); err == nil {
+				if rate, ok := params["logSampleRate"].(int); ok {
+					cfg.SampleRate = rate
+				}
+				if l, err := NewStageLoggerWithConfig(s.name, dir, cfg); err == nil {
 					s.logger = l
 				}
 			}

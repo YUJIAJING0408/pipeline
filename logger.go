@@ -87,6 +87,17 @@ type LogRotation struct {
 	MaxAgeDays int
 }
 
+// LogConfig 汇总描述日志输出的完整策略（级别 + 轮转 + 采样），供 NewStageLoggerWithConfig 使用。
+type LogConfig struct {
+	// Level 为日志级别（低于该级别不写入）。
+	Level LogLevel
+	// Rotation 为轮转策略（D-38）。
+	Rotation LogRotation
+	// SampleRate 为 info/debug 级别的采样分母（D-39）：每第 N 条记录 1 条；
+	// 0 或 1 = 全量；error/warn 恒记不采样。
+	SampleRate int
+}
+
 // StageLogger 管理单个 Stage 的独立日志文件（D-08），输出 JSON 结构化日志。
 //
 // 约定：日志目录下每个 Stage 一个文件，命名 {stageName}.log；
@@ -103,18 +114,27 @@ type StageLogger struct {
 	maxAge       time.Duration // 轮转文件保留时长，0 不按天数清理
 	size         int64         // 当前文件已写字节数
 
+	sampleRate int // info/debug 采样分母（每第 N 条记 1 条），0/1 = 全量
+	sampleCnt  int // info/debug 已写入条数（固定间隔采样计数）
+
 	mu sync.Mutex // 串行化写文件 + Sync + 轮转
 }
 
-// NewStageLogger 在 dir 下创建 {dir}/{stageName}.log 并返回对应 Logger（不启用轮转）。
+// NewStageLogger 在 dir 下创建 {dir}/{stageName}.log 并返回对应 Logger（不启用轮转，不全量采样）。
 // dir 不存在时自动创建（MkdirAll）。
 func NewStageLogger(stageName, dir string, level LogLevel) (*StageLogger, error) {
-	return NewStageLoggerWithRotation(stageName, dir, level, LogRotation{})
+	return NewStageLoggerWithConfig(stageName, dir, LogConfig{Level: level})
 }
 
 // NewStageLoggerWithRotation 在 dir 下创建 {dir}/{stageName}.log，并按 rotation 配置轮转（D-38）。
 // dir 不存在时自动创建（MkdirAll）；rotation 全零等价于 NewStageLogger。
 func NewStageLoggerWithRotation(stageName, dir string, level LogLevel, rotation LogRotation) (*StageLogger, error) {
+	return NewStageLoggerWithConfig(stageName, dir, LogConfig{Level: level, Rotation: rotation})
+}
+
+// NewStageLoggerWithConfig 按 LogConfig 完整策略创建 StageLogger（级别 + 轮转 + 采样，D-08/D-38/D-39）。
+// dir 不存在时自动创建（MkdirAll）；config 全零等价于 NewStageLogger。
+func NewStageLoggerWithConfig(stageName, dir string, cfg LogConfig) (*StageLogger, error) {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return nil, err
 	}
@@ -131,12 +151,13 @@ func NewStageLoggerWithRotation(stageName, dir string, level LogLevel, rotation 
 	return &StageLogger{
 		file:         f,
 		stage:        stageName,
-		level:        level,
+		level:        cfg.Level,
 		path:         path,
-		maxSizeBytes: int64(rotation.MaxSizeMB) * 1024 * 1024,
-		maxBackups:   rotation.MaxBackups,
-		maxAge:       time.Duration(rotation.MaxAgeDays) * 24 * time.Hour,
+		maxSizeBytes: int64(cfg.Rotation.MaxSizeMB) * 1024 * 1024,
+		maxBackups:   cfg.Rotation.MaxBackups,
+		maxAge:       time.Duration(cfg.Rotation.MaxAgeDays) * 24 * time.Hour,
 		size:         cur,
+		sampleRate:   cfg.SampleRate,
 	}, nil
 }
 
@@ -212,12 +233,19 @@ func fieldMap(fields []LogField) map[string]any {
 	return m
 }
 
-// write 序列化一行 JSON 并追加写入文件（并发安全，级别过滤；达到大小阈值时先轮转再写入）。
+// write 序列化一行 JSON 并追加写入文件（并发安全，级别过滤 + 采样；达到大小阈值时先轮转再写入）。
 func (l *StageLogger) write(level LogLevel, msg string, fields map[string]any) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	if level < l.level {
 		return
+	}
+	// 采样（D-39）：error/warn 恒记；info/debug 按固定间隔（每第 N 条记 1 条）采样。
+	if level < LogLevelWarn {
+		l.sampleCnt++
+		if l.sampleRate > 1 && l.sampleCnt%l.sampleRate != 0 {
+			return // 命中采样丢弃：跳过序列化与写盘
+		}
 	}
 	line := logLine{
 		TS:     time.Now().Format(time.RFC3339Nano),

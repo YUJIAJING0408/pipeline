@@ -70,6 +70,7 @@
 | D-36 关闭一致性修复 | 已实现（1.1.0） | 重试等待中被 ctx 取消打断时补投死信（原静默丢失）；Merge 下游 Stage 透传 params（monitor/logger/errPol/deadLetter），面板不再盲区 |
 | D-37 Prometheus 监控 | 已实现（1.1.0） | 独立可选子模块 `metrics/prometheus`（`prometheus.Collector` 接口），基于 `Monitor.Metrics()` 快照暴露 11 个指标（含吞吐/延迟/错误分类/路由流量/背压）；`go get` 时仅拉取子模块依赖，主库保持零依赖 |
 | D-38 日志轮转 | 已实现（1.1.2） | `StageLogger` 支持按大小/数量/天数轮转：`LogRotation{MaxSizeMB, MaxBackups, MaxAgeDays}`（均 0 = 关闭，保持旧行为）；写入时检测大小超限触发轮转，旧文件按 `{stage}.log.N` 后缀推移，超数量删除 + 超天数清理（详见 7.1） |
+| D-39 日志采样 | 已实现（1.1.3） | `StageLogger` 支持按量采样：`LogSampleRate`（默认 1 = 全量）对 **info/debug 级别** 按固定间隔采样（每第 N 条记录 1 条），**error/warn 恒记不采样**——错误/警告一次性都不能丢，常规事件抽样保有运行趋势（详见 7.1） |
 
 ### 已暂时排除的内容（YAGNI）
 
@@ -450,6 +451,14 @@ Pipeline.Close(timeout)  →  根 Stage.Close(timeout)
 - 级别控制：`PipelineConfig.LogLevel` 静态配置，`StageLogger.SetLevel()` 运行期动态调整；
 - 写日志 API：`Debugf/Infof/Warnf/Errorf`（格式化）+ `Debugw/Infow/Warnw/Errorw`（结构化字段 + `F(key, value)`）；`Printf` 保留兼容（等价 Info）；
 - 并发安全：写文件由内部 mutex 串行化；字段含无法序列化值（chan/func）时降级为仅 msg 行。
+- **日志采样（D-39）**：`StageLogger` 可通过 `LogSampleRate` 控制高吞吐场景下的落盘量：
+  - `LogSampleRate`（`PipelineConfig.LogSampleRate`）：采样分母，默认 1 = 全量记录；
+  - **info/debug 级别**按固定间隔采样：记录第 N、2N、3N … 条（N = sampleRate），
+    其余丢弃——抽样分布均匀，反映运行趋势；
+  - **error/warn 级别恒记不采样**：错误与警告一次性都不能丢，仅常规事件抽样；
+  - 与级别过滤（D-08）、轮转（D-38）三者互补：级别管"哪些级别写"、采样管"同级别写几条"、
+    轮转管"写下来的文件多大/留几个"；
+  - 实现零锁负担：采样判断在写锁临界区内以一次性计数器完成（`atomic` 计数，超出即跳过序列化）。
 - **日志轮转（D-38）**：`StageLogger` 可通过 `LogRotation` 配置轮转策略，防止单文件无限增长：
   - `MaxSizeMB`：单文件达到该大小（MB）后触发轮转（0 = 不按大小轮转，默认保持旧行为）；
   - `MaxBackups`：保留的轮转文件数量（`.log.1` ~ `.log.N`，超过即删除最旧，0 = 保留全部）；

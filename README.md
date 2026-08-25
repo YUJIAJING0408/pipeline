@@ -46,7 +46,8 @@
 - **Keyed 汇聚**：`MergeNode` 按 `MergeKey` 凑齐多分支结果合并（D-26），支持多下游 + 路由
 - **生命周期钩子**：`StageHooks`（`OnBeforeProcess`/`OnAfterProcess`）注入 trace / 审计 / 限流
 - **JSON 结构化日志**：每 Stage 独立文件，四级日志级别（debug/info/warn/error）+ 结构化字段；
-  支持按大小/份数/天数轮转清理（`LogRotation`），防止单文件无限增长（D-38）
+  支持按大小/份数/天数轮转清理（`LogRotation`），防止单文件无限增长（D-38）；
+  支持按量采样（`LogSampleRate`），info/debug 抽样记录、error/warn 恒记，高吞吐可控（D-39）
 - **实时指标面板**：`MetricsServer` 基于标准库 HTTP + SSE 推送吞吐 / P50 / P99 / 队列深度 / 阻塞时长；
   可独立端口运行，也可挂载到用户 HTTP 服务；面板含吞吐趋势折线图 + 整链路汇总行 + 错误分类列（D-33/D-34）
 - **便捷输出收集**：`Pipeline.Output(fn)` / `OutputChan()` 直接取根 Stage 最终结果；`SignalContext()` 一行优雅关闭（D-34）

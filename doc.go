@@ -31,6 +31,7 @@
 //   - 生命周期钩子（D-24）：StageHooks，OnBeforeProcess / OnAfterProcess；
 //   - 结构化日志（D-08）：JSON 格式，四级日志级别，结构化字段；
 //     支持 LogRotation 日志轮转（D-38）：MaxSizeMB / MaxBackups / MaxAgeDays 三策略独立开关；
+//     支持 LogSampleRate 日志采样（D-39）：info/debug 按量抽样、error/warn 恒记；
 //   - MergeNode（D-26）：按 MergeKey 凑齐 N 分支后合并，支持多下游 + routeFn 条件路由；
 //     可观测性对齐 Stage（D-30）：SlowThreshold 慢日志 / RateLimiter 限流 / OnMergeError 回调 / stageMonitor 监控；
 //   - Pipeline.Validate()（D-28）：构建期拓扑校验，检测环 / MergeNode 配置错误 / 孤立节点；

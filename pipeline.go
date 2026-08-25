@@ -24,6 +24,9 @@ type PipelineConfig struct {
 	LogLevel LogLevel
 	// LogRotation 为各 Stage 日志轮转策略（D-38）；全零 = 不轮转。
 	LogRotation LogRotation
+	// LogSampleRate 为各 Stage 日志采样分母（D-39）：info/debug 每第 N 条记 1 条，
+	// error/warn 恒记；0 或 1 = 全量。
+	LogSampleRate int
 	// DeadLetter 为死信队列配置；nil 表示不启用（D-23）。
 	// Sink 非 nil 时使用用户提供实现（DB/MQ 等）；否则用默认 JSONL 落盘到 Dir。
 	DeadLetter *DeadLetterConfig
@@ -194,13 +197,14 @@ func (p *Pipeline[T1, T2]) Run(ctx context.Context) error {
 	p.started.Store(true)
 
 	params := map[string]any{
-		"logDir":      p.config.LogDir,
-		"logEnabled":  p.config.LogEnabled,
-		"logLevel":    p.config.LogLevel,
-		"logRotation": p.config.LogRotation,
-		"monitor":     p.monitor,
-		"errPol":      &p.errPol,
-		"deadLetter":  p.config.DeadLetter,
+		"logDir":        p.config.LogDir,
+		"logEnabled":    p.config.LogEnabled,
+		"logLevel":      p.config.LogLevel,
+		"logRotation":   p.config.LogRotation,
+		"logSampleRate": p.config.LogSampleRate,
+		"monitor":       p.monitor,
+		"errPol":        &p.errPol,
+		"deadLetter":    p.config.DeadLetter,
 	}
 	err := p.stage.Start(ctx, params)
 	if err != nil {

@@ -483,3 +483,148 @@ func fileSize(t *testing.T, path string) int64 {
 	}
 	return info.Size()
 }
+
+// countLogLines 统计目录下所有 stage 相关日志文件的总行数（主文件 + 轮转备份）。
+func countLogLines(t *testing.T, dir, stage string) int {
+	t.Helper()
+	total := 0
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatalf("读取目录失败: %v", err)
+	}
+	for _, e := range entries {
+		name := e.Name()
+		if name == stage+".log" || strings.HasPrefix(name, stage+".log.") {
+			data := mustReadLog(t, filepath.Join(dir, name))
+			for _, line := range strings.Split(strings.TrimSpace(data), "\n") {
+				if line != "" {
+					total++
+				}
+			}
+		}
+	}
+	return total
+}
+
+// TestStageLoggerSampleInfo 验证 sampleRate=N 时 info 只记录第 N、2N、3N…条。
+func TestStageLoggerSampleInfo(t *testing.T) {
+	dir := t.TempDir()
+	l, err := NewStageLoggerWithConfig("stage-sp", dir, LogConfig{
+		Level:      LogLevelInfo,
+		SampleRate: 3, // 每 3 条记 1 条
+	})
+	if err != nil {
+		t.Fatalf("NewStageLoggerWithConfig 失败: %v", err)
+	}
+	defer l.Close()
+
+	const writes = 10
+	for i := 0; i < writes; i++ {
+		l.Infow("sample", F("i", i))
+	}
+	_ = l.Sync()
+
+	// 第 3、6、9 条被记录（sampleRate=3），其余丢弃：writes/3 = 3 行。
+	want := writes / 3
+	if got := countLogLines(t, dir, "stage-sp"); got != want {
+		t.Fatalf("info 采样后行数 = %d, want %d", got, want)
+	}
+}
+
+// TestStageLoggerSampleErrorAlways 验证 sampleRate 下 error 恒记（不采样）。
+func TestStageLoggerSampleErrorAlways(t *testing.T) {
+	dir := t.TempDir()
+	l, err := NewStageLoggerWithConfig("stage-se", dir, LogConfig{
+		Level:      LogLevelError,
+		SampleRate: 3,
+	})
+	if err != nil {
+		t.Fatalf("NewStageLoggerWithConfig 失败: %v", err)
+	}
+	defer l.Close()
+
+	const writes = 7
+	for i := 0; i < writes; i++ {
+		l.Errorf("boom %d", i)
+	}
+	_ = l.Sync()
+
+	if got := countLogLines(t, dir, "stage-se"); got != writes {
+		t.Fatalf("error 恒记：行数 = %d, want %d", got, writes)
+	}
+}
+
+// TestStageLoggerSampleWarnAlways 验证 sampleRate 下 warn 恒记（不采样）。
+func TestStageLoggerSampleWarnAlways(t *testing.T) {
+	dir := t.TempDir()
+	l, err := NewStageLoggerWithConfig("stage-sw", dir, LogConfig{
+		Level:      LogLevelWarn,
+		SampleRate: 5,
+	})
+	if err != nil {
+		t.Fatalf("NewStageLoggerWithConfig 失败: %v", err)
+	}
+	defer l.Close()
+
+	const writes = 6
+	for i := 0; i < writes; i++ {
+		l.Warnf("careful %d", i)
+	}
+	_ = l.Sync()
+
+	if got := countLogLines(t, dir, "stage-sw"); got != writes {
+		t.Fatalf("warn 恒记：行数 = %d, want %d", got, writes)
+	}
+}
+
+// TestStageLoggerSampleDisabled 验证 sampleRate 0 / 1 时全量记录（不采样）。
+func TestStageLoggerSampleDisabled(t *testing.T) {
+	for _, rate := range []int{0, 1} {
+		dir := t.TempDir()
+		l, err := NewStageLoggerWithConfig("stage-sd", dir, LogConfig{
+			Level:      LogLevelInfo,
+			SampleRate: rate,
+		})
+		if err != nil {
+			t.Fatalf("NewStageLoggerWithConfig(rate=%d) 失败: %v", rate, err)
+		}
+		for i := 0; i < 5; i++ {
+			l.Infow("full", F("i", i))
+		}
+		_ = l.Sync()
+		_ = l.Close()
+
+		if got := countLogLines(t, dir, "stage-sd"); got != 5 {
+			t.Fatalf("sampleRate=%d 应全量记录：行数 = %d, want 5", rate, got)
+		}
+	}
+}
+
+// TestStageLoggerSamplingPipeline 验证 PipelineConfig.LogSampleRate 经 params 生效于 Stage 日志。
+func TestStageLoggerSamplingPipeline(t *testing.T) {
+	dir := t.TempDir()
+	in := make(chan string, 32)
+	s := NewStage("stage-pl", StageConfig{Workers: 1, OutCap: 4}, in, nil, func(ctx context.Context, x string) (string, error) {
+		return x, nil
+	})
+
+	params := map[string]any{
+		"logDir":        dir,
+		"logEnabled":    true,
+		"logSampleRate": 2,
+	}
+	if err := s.Start(context.Background(), params); err != nil {
+		t.Fatalf("Start 失败: %v", err)
+	}
+
+	for i := 0; i < 5; i++ {
+		in <- "a"
+	}
+	close(in)
+	_ = s.Close(time.Second)
+
+	// Stage 启动/关闭各写 1 条 info（处理过程不写日志）；sampleRate=2 → 第 1 条丢弃、第 2 条保留 = 1 行。
+	if got := countLogLines(t, dir, "stage-pl"); got != 1 {
+		t.Fatalf("Pipeline 采样后行数 = %d, want 1（2 条 info 每 2 记 1）", got)
+	}
+}
