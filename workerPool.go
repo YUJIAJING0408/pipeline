@@ -35,6 +35,8 @@ type workerPool[In, Out any] struct {
 	slowThreshold time.Duration
 	// stageMonitor 耗时与计数统计（D-02，非 nil 时记录）。
 	stageMonitor *StageMonitor
+	// logger 结构化日志写入器（非 nil 时慢日志走 Warnw 落日志文件，否则走 stdout）。
+	logger *StageLogger
 	// errPol 错误策略（D-04，非 nil 时按模式处理错误）。
 	errPol *ErrPolicy
 	// hooks 生命周期回调（D-24，非 nil 时在 process 前后调用）。
@@ -136,8 +138,12 @@ func (wp *workerPool[In, Out]) handle(ctx context.Context, in In) {
 	}
 
 	if wp.slowThreshold > 0 && elapsed > wp.slowThreshold {
-		fmt.Printf("[slow] stage=%s input=%v took=%v threshold=%v\n",
-			wp.stageName, in, elapsed, wp.slowThreshold)
+		if wp.logger != nil {
+			wp.logger.Warnw("slow", F("stage", wp.stageName), F("input", in), F("took", elapsed.String()), F("threshold", wp.slowThreshold.String()))
+		} else {
+			fmt.Printf("[slow] stage=%s input=%v took=%v threshold=%v\n",
+				wp.stageName, in, elapsed, wp.slowThreshold)
+		}
 	}
 	// 记录耗时到监控统计（D-02）。注意：成败标记（err != nil）在错误处理完成后才记录，
 	// 避免重试成功的数据被错误计入失败计数——首次失败但重试成功的数据，不计入 errors。

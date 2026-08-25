@@ -368,6 +368,7 @@ func (s *Stage[T1, T2]) Start(ctx context.Context, params map[string]any) error 
 	s.pool.hooks = &s.config.Hooks
 	s.pool.dlWriter = s.dlWriter
 	s.pool.rateLimiter = s.config.RateLimiter
+	s.pool.logger = s.logger
 	s.pool.cancel = s.forwardCancel
 	s.running.Store(true)
 	s.pool.start(s.ctx)

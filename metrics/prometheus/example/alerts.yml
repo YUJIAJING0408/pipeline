@@ -28,3 +28,12 @@ groups:
         annotations:
           summary: 'Stage {{ $labels.stage }} 吞吐量 {{ $value | humanize }}/s'
           description: '吞吐量低于 10/s，持续 1 分钟，可能 Pipeline 停滞'
+
+      - alert: P99 延迟过高
+        expr: pipeline_stage_latency_p99_ns > 200000000
+        for: 1m
+        labels:
+          severity: warning
+        annotations:
+          summary: 'Stage {{ $labels.stage }} P99 延迟 {{ $value | humanizeDuration }}'
+          description: 'P99 延迟超过 200ms，持续 1 分钟，下游依赖可能变慢'

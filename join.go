@@ -89,30 +89,33 @@ type MergeNode[T Keyable] struct {
 	name   string
 	cfg    JoinConfig[T]
 	merge  func(ctx context.Context, batch []T) (T, error)
-	srcs   []srcEntry[T]         // Wire 采集的分支（Stager 用于拓扑 + channel 用于收集）
-	output chan T                // 合并结果内部通道（fan-out 分发到各下游）
-	outs   []outEntry[T]         // 下游分支（路由 + 生命周期 + 拓扑）
+	srcs   []srcEntry[T] // Wire 采集的分支（Stager 用于拓扑 + channel 用于收集）
+	output chan T        // 合并结果内部通道（fan-out 分发到各下游）
+	outs   []outEntry[T] // 下游分支（路由 + 生命周期 + 拓扑）
 
 	pending   map[string]*pending[T]
 	collector chan collectItem[T] // 转发 goroutine → 收集 goroutine
 	mergeCh   chan []T            // 收集 → merge 工作池的有界任务队列
 
-	srcWG sync.WaitGroup  // 各分支转发 goroutine
-	mgWG  sync.WaitGroup  // merge 工作池
-	cgWG  sync.WaitGroup  // 收集 goroutine
-	fanWG sync.WaitGroup  // fan-out 分发 goroutine
+	srcWG sync.WaitGroup // 各分支转发 goroutine
+	mgWG  sync.WaitGroup // merge 工作池
+	cgWG  sync.WaitGroup // 收集 goroutine
+	fanWG sync.WaitGroup // fan-out 分发 goroutine
 
 	// stageMonitor 耗时与计数统计（D-30，params 注入，非 nil 时记录 merge 数据）。
 	stageMonitor *StageMonitor
 
+	// logger 结构化日志写入器（D-30，params 注入，非 nil 时慢日志走 Warnw 落日志文件）。
+	logger *StageLogger
+
 	ctx    context.Context
 	cancel context.CancelFunc
 
-	startOnce  sync.Once
-	startErr   error
-	closeOnce  sync.Once
-	closeErr   error
-	refs       atomic.Int32  // 当前存活的父调用方计数（Start +1 / Close -1）
+	startOnce    sync.Once
+	startErr     error
+	closeOnce    sync.Once
+	closeErr     error
+	refs         atomic.Int32 // 当前存活的父调用方计数（Start +1 / Close -1）
 	describeOnce sync.Once
 
 	// subStages 下游 Stage 列表（由 NextStage 创建，Start/Close 递归遍历）。
@@ -121,8 +124,8 @@ type MergeNode[T Keyable] struct {
 
 // outEntry 记录一个下游分支（fan-out 目标 + 路由条件 + 生命周期引用）。
 type outEntry[T any] struct {
-	ch      chan T      // 下游分支独立输入通道（fan-out 复制目标）
-	stage   Stager      // 下游 Stage（生命周期 + 拓扑）
+	ch      chan T       // 下游分支独立输入通道（fan-out 复制目标）
+	stage   Stager       // 下游 Stage（生命周期 + 拓扑）
 	routeFn func(T) bool // 路由条件（nil = 放行所有）
 }
 
@@ -282,11 +285,30 @@ func (j *MergeNode[T]) doStart(ctx context.Context, params map[string]any) error
 		seen[s.stage] = true
 	}
 
-	// 注册监控统计（D-30）：从 params 读取 monitor（与 Stage 对齐）。
+	// 注册监控统计 + 创建日志（D-30）：与 Stage 对齐，从 params 读取统一配置。
 	if params != nil {
 		if mon, ok := params["monitor"].(*Monitor); ok && mon != nil {
 			j.stageMonitor = &StageMonitor{}
 			mon.Register(j.name, j.stageMonitor)
+		}
+		if dir, ok := params["logDir"].(string); ok && dir != "" {
+			if enabled, ok := params["logEnabled"].(bool); ok && enabled {
+				level := LogLevelInfo
+				if lv, ok := params["logLevel"].(LogLevel); ok {
+					level = lv
+				}
+				rot := LogRotation{}
+				if r, ok := params["logRotation"].(LogRotation); ok {
+					rot = r
+				}
+				rate := 0
+				if r, ok := params["logSampleRate"].(int); ok {
+					rate = r
+				}
+				if l, err := NewStageLoggerWithConfig(j.name, dir, LogConfig{Level: level, Rotation: rot, SampleRate: rate}); err == nil {
+					j.logger = l
+				}
+			}
 		}
 	}
 
@@ -457,10 +479,14 @@ func (j *MergeNode[T]) runMerge(batch []T) {
 
 	elapsed := time.Since(start)
 
-	// 慢日志（D-22）：单次合并超过阈值即打印。
+	// 慢日志（D-22）：单次合并超过阈值即记录。
 	if j.cfg.SlowThreshold > 0 && elapsed > j.cfg.SlowThreshold {
-		fmt.Printf("[slow] stage=%s took=%v threshold=%v batch_size=%d\n",
-			j.name, elapsed, j.cfg.SlowThreshold, len(batch))
+		if j.logger != nil {
+			j.logger.Warnw("slow", F("stage", j.name), F("took", elapsed.String()), F("threshold", j.cfg.SlowThreshold.String()), F("batch_size", len(batch)))
+		} else {
+			fmt.Printf("[slow] stage=%s took=%v threshold=%v batch_size=%d\n",
+				j.name, elapsed, j.cfg.SlowThreshold, len(batch))
+		}
 	}
 
 	// 监控统计（D-02）：记录 merge 耗时与成败。
@@ -554,10 +580,10 @@ func (j *MergeNode[T]) doClose(drainTimeout time.Duration) error {
 	}
 	done := make(chan struct{})
 	go func() {
-		j.srcWG.Wait()  // 转发 goroutine 退出（分支已关闭 or ctx 取消）
-		j.cgWG.Wait()   // 收集 goroutine 退出（含 flushAll 交付残余）
+		j.srcWG.Wait()   // 转发 goroutine 退出（分支已关闭 or ctx 取消）
+		j.cgWG.Wait()    // 收集 goroutine 退出（含 flushAll 交付残余）
 		close(j.mergeCh) // 唤醒 merge 工作池排空
-		j.mgWG.Wait()   // merge 工作池排空完成
+		j.mgWG.Wait()    // merge 工作池排空完成
 		close(done)
 	}()
 	drainTimer := time.NewTimer(drainTimeout)
@@ -580,6 +606,9 @@ func (j *MergeNode[T]) doClose(drainTimeout time.Duration) error {
 	// 下游 Stage 的 worker 自然排空，不会阻塞）。
 	for i := len(j.subStages) - 1; i >= 0; i-- {
 		_ = j.subStages[i].Close(drainTimeout)
+	}
+	if j.logger != nil {
+		_ = j.logger.Close()
 	}
 	return nil
 }
